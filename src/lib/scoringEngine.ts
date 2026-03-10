@@ -99,7 +99,7 @@ async function generatePlanForWeek(
                 continue;
             }
 
-            if (!isPinned && daysSinceVisit < freqLimit - 7) {
+            if (!isPinned && daysSinceVisit < freqLimit - 3) {
                 continue; // Not due yet, skip this school for this week to avoid bunching up
             }
 
@@ -108,6 +108,16 @@ async function generatePlanForWeek(
 
             if (isPinned) {
                 score = 1000;
+            }
+
+            // Boost score for schools that haven't been visited recently
+            if (daysSinceVisit >= 14) {
+                score += 25; // Give extra priority to schools not visited in 2+ weeks
+            }
+            
+            // Boost score for monthly schools that haven't been visited in a while
+            if (school.frequencyTarget === "monthly" && daysSinceVisit >= 20) {
+                score += 50; // Give priority to monthly schools after 3 weeks
             }
 
             let viableRules = rules.filter(r => (r.dayType === day.dayType) || (r.weekday === weekdayName));
