@@ -137,6 +137,12 @@ async function generatePlanForWeek(
                     viableRules = [specificRule];
                 }
             }
+            
+            // TEMPORARY FIX: If no viable rules, try all rules to show more schools
+            if (viableRules.length === 0 && rules.length > 0) {
+                viableRules = [rules[0]]; // Take first available rule as fallback
+            }
+            
             if (viableRules.length === 0) continue;
 
             let reason = "";
