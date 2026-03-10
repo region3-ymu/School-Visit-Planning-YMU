@@ -91,6 +91,54 @@ export async function seedSchoolsMock() {
         return { success: true, count: existingCount, skipped: true };
     }
 
+    // Seed A/B Calendar for 2025-26 School Year
+    const calendarData = [];
+    const startDate = new Date('2025-08-18'); // Start of school year
+    
+    for (let week = 0; week < 40; week++) { // 40 weeks of school
+        const weekStart = addDays(startDate, week * 7);
+        
+        for (let day = 0; day < 5; day++) { // Monday-Friday
+            const currentDate = addDays(weekStart, day);
+            
+            // Skip holidays and weekends
+            if (currentDate.getDay() === 0 || currentDate.getDay() === 6) continue;
+            
+            // A/B Day pattern: Alternating A/B days with some exceptions
+            let dayType: string;
+            const dayOfWeek = currentDate.getDay();
+            const weekOfYear = Math.floor((currentDate.getTime() - new Date(currentDate.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
+            
+            // Standard pattern: Monday/Wednesday = A, Tuesday/Thursday = B, Friday alternates
+            if (dayOfWeek === 1 || dayOfWeek === 3) { // Monday, Wednesday
+                dayType = "A";
+            } else if (dayOfWeek === 2 || dayOfWeek === 4) { // Tuesday, Thursday
+                dayType = "B";
+            } else { // Friday - alternate
+                dayType = weekOfYear % 2 === 0 ? "A" : "B";
+            }
+            
+            calendarData.push({
+                date: currentDate,
+                dayType: dayType as "A" | "B",
+                description: `${dayType} Day`
+            });
+        }
+    }
+
+    // Insert calendar days
+    for (const calDay of calendarData) {
+        await prisma.calendarDay.upsert({
+            where: { date: calDay.date },
+            update: { dayType: calDay.dayType, description: calDay.description },
+            create: {
+                date: calDay.date,
+                dayType: calDay.dayType,
+                description: calDay.description
+            }
+        });
+    }
+
     // Keep strict dates using specific UTC strings for consistency
     const tz = "T12:00:00Z";
 
