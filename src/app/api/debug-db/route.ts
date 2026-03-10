@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
 
 export async function GET(request: NextRequest) {
   try {
+    // Dynamic import to avoid build-time issues
+    const { PrismaClient } = await import('@prisma/client');
+    const prisma = new PrismaClient();
+    
     // Test database connection
     await prisma.$connect();
     
@@ -21,6 +22,8 @@ export async function GET(request: NextRequest) {
       seedResult = await seedSchoolsMock();
     }
     
+    await prisma.$disconnect();
+    
     return NextResponse.json({
       success: true,
       database: 'connected',
@@ -36,7 +39,5 @@ export async function GET(request: NextRequest) {
       error: error instanceof Error ? error.message : 'Unknown error',
       database: 'disconnected'
     }, { status: 500 });
-  } finally {
-    await prisma.$disconnect();
   }
 }

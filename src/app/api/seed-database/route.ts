@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { seedSchoolsMock } from '@/app/actions';
 
 export async function POST(request: NextRequest) {
   try {
+    // Dynamic import to avoid build-time issues
+    const { seedSchoolsMock } = await import('@/app/actions');
     const result = await seedSchoolsMock();
     
     return NextResponse.json({
