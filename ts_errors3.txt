@@ -1,0 +1,3 @@
+src/app/actions.ts(3,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+src/lib/calendarParser.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+src/lib/scoringEngine.ts(1,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.

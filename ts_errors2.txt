@@ -1,0 +1,6 @@
+src/app/actions.ts(3,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+src/components/MapZoneView.tsx(42,30): error TS18046: 'zoneSchools' is of type 'unknown'.
+src/components/MapZoneView.tsx(42,46): error TS7006: Parameter 's' implicitly has an 'any' type.
+src/lib/calendarParser.ts(2,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+src/lib/scoringEngine.ts(1,10): error TS2305: Module '"@prisma/client"' has no exported member 'PrismaClient'.
+src/lib/scoringEngine.ts(27,41): error TS7006: Parameter 'c' implicitly has an 'any' type.

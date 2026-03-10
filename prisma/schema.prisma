@@ -1,0 +1,46 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model School {
+  id               String      @id @default(cuid())
+  name             String
+  zipCode          String      // For geographic clustering
+  address          String?
+  lat              Float?
+  lng              Float?
+  availability     String      // Stored as JSON string due to SQLite limitations with JSON arrays
+  frequencyTarget  String      // E.g., "weekly", "bi-weekly", "monthly"
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  visitLogs        VisitLog[]
+}
+
+model CalendarDay {
+  id          String   @id @default(cuid())
+  date        DateTime @unique
+  dayType     String   // "A", "B", "Planning", "Holiday"
+  description String?  // Optional description (e.g., "Thanksgiving")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model VisitLog {
+  id        String   @id @default(cuid())
+  schoolId  String
+  school    School   @relation(fields: [schoolId], references: [id])
+  date      DateTime
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([schoolId])
+}
