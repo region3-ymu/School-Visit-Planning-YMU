@@ -350,14 +350,14 @@ export default function WeeklyPlanner() {
                                         const isViable = optionsForDay.length > 0;
 
                                         const currentVisitsCount = plannedVisits.filter(v => format(new Date(v.date), "yyyy-MM-dd") === dateStr).length;
-                                        const isFull = currentVisitsCount >= 3;
+                                        const isFull = currentVisitsCount >= 4;
 
                                         return (
                                             <div key={idx} className="flex flex-col border border-gray-100 dark:border-zinc-800 rounded-lg p-2 bg-white dark:bg-zinc-800/20">
                                                 <div className="flex justify-between items-center mb-1">
                                                     <span className="text-xs font-bold text-gray-500 uppercase">{format(day, "EEEE")}</span>
                                                     {!isViable && <span className="text-[10px] font-bold text-gray-400 uppercase">Not Available</span>}
-                                                    {isViable && isFull && <span className="text-[10px] font-bold text-red-500 uppercase">Full (3 Visits)</span>}
+                                                    {isViable && isFull && <span className="text-[10px] font-bold text-red-500 uppercase">Full (4 Visits)</span>}
                                                 </div>
 
                                                 {!isViable && (
@@ -445,7 +445,7 @@ export default function WeeklyPlanner() {
                                             {optionsForAdd.filter(opt => format(new Date(opt.date + "T12:00:00Z"), 'yyyy-MM-dd') >= format(new Date(), 'yyyy-MM-dd')).map((opt, i) => {
                                                 const optDateStr = format(new Date(opt.date + "T12:00:00Z"), 'yyyy-MM-dd');
                                                 const scheduledThisDay = plannedVisits.filter(v => format(new Date(v.date), 'yyyy-MM-dd') === optDateStr).length;
-                                                const isFull = scheduledThisDay >= 3;
+                                                const isFull = scheduledThisDay >= 4;
 
                                                 return (
                                                     <button
@@ -464,7 +464,7 @@ export default function WeeklyPlanner() {
                                                         </div>
                                                         {isFull && (
                                                             <span className="text-[10px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 px-2 py-1 rounded">
-                                                                Full (3)
+                                                                Full (4)
                                                             </span>
                                                         )}
                                                     </button>

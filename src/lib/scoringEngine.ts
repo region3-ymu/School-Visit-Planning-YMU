@@ -95,7 +95,7 @@ async function generatePlanForWeek(
                 continue;
             }
 
-            if (!isPinned && daysSinceVisit < freqLimit - 7) {
+            if (!isPinned && daysSinceVisit < freqLimit - 14) {
                 continue; // Not due yet, skip this school for this week to avoid bunching up
             }
 
@@ -131,7 +131,7 @@ async function generatePlanForWeek(
 
         availableCandidates.sort((a, b) => b.score - a.score);
 
-        const maxVisitsPerDay = 3;
+        const maxVisitsPerDay = 4;
         const remainingForWeek = maxVisitsPerWeek - scheduledSchoolIds.size;
         const validPickCount = Math.min(maxVisitsPerDay, remainingForWeek);
 
