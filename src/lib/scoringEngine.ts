@@ -99,8 +99,18 @@ async function generatePlanForWeek(
                 continue;
             }
 
-            if (!isPinned && daysSinceVisit < freqLimit - 3) {
-                continue; // Not due yet, skip this school for this week to avoid bunching up
+            // Apply frequency filtering logic
+            if (!isPinned) {
+                if (school.frequencyTarget === "weekly") {
+                    // Weekly schools can appear every week
+                    if (daysSinceVisit < 0) continue; // Only skip if visited in future
+                } else if (school.frequencyTarget === "bi-weekly") {
+                    // Bi-weekly schools appear every 2 weeks
+                    if (daysSinceVisit < 7) continue; // Skip if visited less than 1 week ago
+                } else if (school.frequencyTarget === "monthly") {
+                    // Monthly schools appear once per month
+                    if (daysSinceVisit < 21) continue; // Skip if visited less than 3 weeks ago
+                }
             }
 
             const isOverdue = daysSinceVisit >= freqLimit;
