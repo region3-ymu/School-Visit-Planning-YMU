@@ -99,7 +99,7 @@ async function generatePlanForWeek(
                 continue;
             }
 
-            if (!isPinned && daysSinceVisit < freqLimit - 14) {
+            if (!isPinned && daysSinceVisit < freqLimit - 7) {
                 continue; // Not due yet, skip this school for this week to avoid bunching up
             }
 
