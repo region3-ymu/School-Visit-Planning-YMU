@@ -311,8 +311,6 @@ const confirmVisitSchema = z
     // server-side from the previous confirmed visit and this is ignored.
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
-    outcome: z.enum(["GOOD", "REGULAR"]),
-    outcomeNotes: z.string().max(2000).optional(),
     principalNotes: z.string().max(2000).optional(),
     hasInstrumentRequest: z.boolean().default(false),
     instrumentRequestDetails: z.string().max(2000).optional(),
@@ -326,10 +324,6 @@ const confirmVisitSchema = z
     obsEngagementEvidence: observationRatingSchema.optional(),
     obsProfessionalismGrowth: observationRatingSchema.optional(),
     obsNotes: z.string().max(2000).optional(),
-  })
-  .refine((data) => data.outcome !== "REGULAR" || !!data.outcomeNotes?.trim(), {
-    message: "outcomeNotes is required when outcome is REGULAR",
-    path: ["outcomeNotes"],
   })
   .refine((data) => !data.hasInstrumentRequest || !!data.instrumentRequestDetails?.trim(), {
     message: "instrumentRequestDetails is required when hasInstrumentRequest is true",
@@ -485,8 +479,6 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         visitedById: user.id,
         milesDriven: milesDriven ?? undefined,
         originLabel: originLabel ?? undefined,
-        outcome: data.outcome,
-        outcomeNotes: data.outcomeNotes ?? undefined,
         visitedWith: data.visitedWith,
         principalNotes: data.principalNotes ?? undefined,
         hasInstrumentRequest: data.hasInstrumentRequest,

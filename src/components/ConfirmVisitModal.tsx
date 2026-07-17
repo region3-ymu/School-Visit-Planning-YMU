@@ -20,12 +20,6 @@ const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
   { value: "YMU_TEACHER", label: "YMU teacher" },
 ];
 
-const REGULAR_SUGGESTIONS = [
-  "Visit this school weekly",
-  "Request a mentor or interventionist",
-  "Escalate to Pedro if unresolved after 2 visits",
-];
-
 type ObservationRating = "NEEDS_SUPPORT" | "DEVELOPING" | "MEETS" | "EXCEEDS";
 type ObservationDomainKey =
   | "obsPlanningPrep"
@@ -85,8 +79,6 @@ export default function ConfirmVisitModal({
   const [customAddress, setCustomAddress] = useState("");
 
   const [visitedWith, setVisitedWith] = useState<string[]>([]);
-  const [outcome, setOutcome] = useState<"GOOD" | "REGULAR" | null>(null);
-  const [outcomeNotes, setOutcomeNotes] = useState("");
   const [principalNotes, setPrincipalNotes] = useState("");
   const [hasInstrumentRequest, setHasInstrumentRequest] = useState(false);
   const [instrumentRequestDetails, setInstrumentRequestDetails] = useState("");
@@ -171,14 +163,6 @@ export default function ConfirmVisitModal({
   const handleSubmit = async () => {
     setFormError(null);
 
-    if (!outcome) {
-      setFormError("Select how the visit went.");
-      return;
-    }
-    if (outcome === "REGULAR" && !outcomeNotes.trim()) {
-      setFormError("Please describe what's happening.");
-      return;
-    }
     if (hasInstrumentRequest && !instrumentRequestDetails.trim()) {
       setFormError("Please describe the instrument request or repair needed.");
       return;
@@ -207,8 +191,6 @@ export default function ConfirmVisitModal({
       await confirmVisit(schoolId, visitDate.toISOString(), {
         origin,
         visitedWith,
-        outcome,
-        outcomeNotes: outcomeNotes.trim() || undefined,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
         hasInstrumentRequest,
         instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
@@ -387,49 +369,6 @@ export default function ConfirmVisitModal({
                 </label>
               ))}
             </div>
-          </div>
-
-          {/* How's it going */}
-          <div>
-            <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">How&apos;s it going?</p>
-            <div className="flex gap-2 mb-2">
-              <button
-                type="button"
-                onClick={() => setOutcome("GOOD")}
-                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium ${
-                  outcome === "GOOD"
-                    ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
-                    : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
-                }`}
-              >
-                Good
-              </button>
-              <button
-                type="button"
-                onClick={() => setOutcome("REGULAR")}
-                className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium ${
-                  outcome === "REGULAR"
-                    ? "border-amber-500 bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                    : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
-                }`}
-              >
-                Regular (problems)
-              </button>
-            </div>
-            {outcome === "REGULAR" && (
-              <div className="space-y-2">
-                <textarea
-                  placeholder="What's happening?"
-                  value={outcomeNotes}
-                  onChange={(e) => setOutcomeNotes(e.target.value)}
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-                />
-                <div className="text-xs text-gray-500 bg-gray-50 dark:bg-zinc-800/50 rounded-lg p-2">
-                  <span className="font-medium">Suggestions:</span> {REGULAR_SUGGESTIONS.join(" · ")}
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Conversation notes — Principal / Main Office / In-school music teacher */}
