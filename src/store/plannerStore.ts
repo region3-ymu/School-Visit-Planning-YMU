@@ -1,11 +1,11 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { format } from 'date-fns';
+import { format, subDays } from 'date-fns';
 import { VisitInfo } from '../lib/types';
 
 interface PlannerState {
-    activeTab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history';
-    setActiveTab: (tab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history') => void;
+    activeTab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'substitutions';
+    setActiveTab: (tab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'substitutions') => void;
 
     weekStartDateStr: string;
     setWeekStartDate: (date: Date) => void;
@@ -21,13 +21,15 @@ interface PlannerState {
     setMaxVisitsPerWeek: (max: number) => void;
 }
 
+const OVERRIDE_RETENTION_DAYS = 14;
+
 export const usePlannerStore = create<PlannerState>()(
     persist(
         (set) => ({
             activeTab: 'dashboard',
             setActiveTab: (tab) => set({ activeTab: tab }),
 
-            weekStartDateStr: new Date().toISOString(), // Use string for persistence
+            weekStartDateStr: new Date().toISOString(),
             setWeekStartDate: (date) => set({ weekStartDateStr: date.toISOString() }),
 
             plannedVisits: [],
@@ -56,8 +58,18 @@ export const usePlannerStore = create<PlannerState>()(
                 manualOverrides: state.manualOverrides,
                 plannedVisits: state.plannedVisits,
                 weekStartDateStr: state.weekStartDateStr,
-                maxVisitsPerWeek: state.maxVisitsPerWeek
+                maxVisitsPerWeek: state.maxVisitsPerWeek,
             }),
+            // Drop overrides older than 14 days on hydration (AUDIT #7)
+            merge: (persisted: unknown, current) => {
+                const p = persisted as Partial<PlannerState>;
+                const cutoff = subDays(new Date(), OVERRIDE_RETENTION_DAYS);
+                const freshOverrides = (p.manualOverrides ?? []).filter((o) => {
+                    if (!o.date) return false;
+                    return new Date(o.date) >= cutoff;
+                });
+                return { ...current, ...p, manualOverrides: freshOverrides };
+            },
         }
     )
 );

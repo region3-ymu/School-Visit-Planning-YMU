@@ -1,6 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,37 +7,316 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ─── Auth (NextAuth / Auth.js v5) ─────────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String?
+  email          String    @unique
+  emailVerified  DateTime?
+  image          String?
+  hashedPassword String?
+  role           Role      @default(MENTOR)
+  regionId       String?
+  // Saved "start from home" location for route/mileage calculations —
+  // only used when explicitly selected, never assumed automatically.
+  homeAddress    String?
+  homeLat        Float?
+  homeLng        Float?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  region        Region?   @relation("UserRegion", fields: [regionId], references: [id])
+  // The region this user manages (only populated for REGIONAL_MANAGER role)
+  managedRegion Region?   @relation("RegionManager")
+  accounts      Account[]
+  sessions      Session[]
+  visits        Visit[]
+
+  @@index([regionId])
+}
+
+// ─── Organization ─────────────────────────────────────────────────────────────
+
+model Region {
+  id                String   @id @default(cuid())
+  name              String   @unique
+  code              String   @unique
+  regionalManagerId String?  @unique
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  manager User?    @relation("RegionManager", fields: [regionalManagerId], references: [id])
+  users   User[]   @relation("UserRegion")
+  schools School[]
+}
+
+// ─── Schools ──────────────────────────────────────────────────────────────────
+
 model School {
-  id               String      @id @default(cuid())
-  name             String
-  zipCode          String      // For geographic clustering
-  address          String?
-  lat              Float?
-  lng              Float?
-  availability     String      // Stored as JSON string due to SQLite limitations with JSON arrays
-  frequencyTarget  String      // E.g., "weekly", "bi-weekly", "monthly"
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  visitLogs        VisitLog[]
+  id                   String    @id @default(cuid())
+  name                 String
+  zipCode              String    @default("")
+  address              String?
+  lat                  Float?
+  lng                  Float?
+  availability         String    @default("[]")
+  active               Boolean   @default(true)
+  regionId             String?
+  googleCalendarId     String?
+  // Google Calendar Events.list sync token for incremental sync — null means
+  // the next sync does a full pull (first sync, or after a 410 Gone reset).
+  calendarSyncToken    String?
+  calendarLastSyncedAt DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  region        Region?        @relation(fields: [regionId], references: [id])
+  classSessions ClassSession[]
+  teachers      Teacher[]
+  visits        Visit[]
+  visitRules    VisitRule[]
+
+  @@index([regionId])
 }
 
-model CalendarDay {
-  id          String   @id @default(cuid())
-  date        DateTime @unique
-  dayType     String   // "A", "B", "Planning", "Holiday"
-  description String?  // Optional description (e.g., "Thanksgiving")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-}
-
-model VisitLog {
-  id        String   @id @default(cuid())
-  schoolId  String
-  school    School   @relation(fields: [schoolId], references: [id])
-  date      DateTime
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model Teacher {
+  id            String         @id @default(cuid())
+  name          String
+  subjects      String?
+  email         String?
+  schoolId      String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  classSessions ClassSession[]
+  school        School?        @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])
+}
+
+model Subject {
+  id            String         @id @default(cuid())
+  name          String         @unique
+  description   String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  classSessions ClassSession[]
+}
+
+model ClassSession {
+  id               String   @id @default(cuid())
+  schoolId         String
+  teacherId        String?
+  subjectId        String
+  startDateTime    DateTime
+  endDateTime      DateTime
+  googleCalendarId String
+  googleEventId    String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  school           School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  subject          Subject  @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher          Teacher? @relation(fields: [teacherId], references: [id])
+
+  @@unique([googleCalendarId, googleEventId])
+  @@index([schoolId])
+  @@index([teacherId])
+  @@index([startDateTime, endDateTime])
+}
+
+model VisitRule {
+  id            String        @id @default(cuid())
+  schoolId      String
+  frequencyType FrequencyType
+  priority      VisitPriority @default(NORMAL)
+  notes         String?
+  reason        String?
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  school        School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId])
+}
+
+model Visit {
+  id                   String      @id @default(cuid())
+  schoolId             String
+  plannedStartDateTime DateTime
+  plannedEndDateTime   DateTime
+  status               VisitStatus
+  reason               String?
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  school               School      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  // ─── Visit confirmation details (captured via the Confirm Visit modal) ──────
+  visitedById                   String?
+  visitedBy                     User?               @relation(fields: [visitedById], references: [id])
+  // Driven distance for this visit's leg, computed server-side from the
+  // chosen origin (home/GPS/custom address) to the school's coordinates.
+  milesDriven                   Decimal?            @db.Decimal(6, 2)
+  originLabel                   String?
+  outcome                       VisitOutcome?
+  outcomeNotes                  String?
+  visitedWith                   VisitedWithOption[]
+  principalNotes                String?
+  hasInstrumentRequest          Boolean             @default(false)
+  instrumentRequestDetails      String?
+  // Future integration flag — no actual API push is implemented yet.
+  instrumentRequestSyncedToYMPA Boolean             @default(false)
+  // Distance (meters) between device GPS and the school at confirm time.
+  geofenceDistanceM             Float?
+  // True when the visit was confirmed outside the geofence radius (or with
+  // no GPS available) via the explicit "confirm anyway" override.
+  geofenceOverridden            Boolean             @default(false)
+
+  // ─── Teacher observation (shown when visitedWith includes YMU_TEACHER) ──────
+  // Each domain is independently skippable ("didn't see it this visit").
+  obsPlanningPrep               ObservationRating?
+  obsCultureManagement          ObservationRating?
+  obsInstructionMusicianship    ObservationRating?
+  obsEngagementEvidence         ObservationRating?
+  obsProfessionalismGrowth      ObservationRating?
+  // Single shared notes field covering all 5 domains, not one per domain.
+  obsNotes                      String?
+
+  @@index([schoolId])
+  @@index([status])
+  @@index([visitedById])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  REGIONAL_MANAGER
+  AFTER_SCHOOL_MANAGER // stub — no granted permissions yet
+  MENTOR
+  INTERVENTIONIST
+}
+
+enum FrequencyType {
+  WEEKLY
+  BIWEEKLY
+  EVERY_3_WEEKS
+  MONTHLY
+}
+
+enum VisitPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum VisitStatus {
+  PLANNED
+  DONE
+  CANCELLED
+  SKIPPED
+}
+
+// How the visit went — distinct from VisitStatus (which tracks
+// scheduling state, not the outcome of a completed visit).
+enum VisitOutcome {
+  GOOD
+  REGULAR
+}
+
+enum VisitedWithOption {
+  PRINCIPAL
+  MAIN_OFFICE
+  INSCHOOL_MUSIC_TEACHER
+  YMU_TEACHER
+}
+
+enum ObservationRating {
+  NEEDS_SUPPORT
+  DEVELOPING
+  MEETS
+  EXCEEDS
+}
+
+// ─── Route optimization cache ───────────────────────────────────────────────────
+
+model TravelMatrixCache {
+  id          String   @id @default(cuid())
+  originLat   Float
+  originLng   Float
+  destLat     Float
+  destLng     Float
+  durationSec Float
+  distanceM   Float
+  createdAt   DateTime @default(now())
+
+  @@unique([originLat, originLng, destLat, destLng])
+}
+
+// ─── Google Calendar sync ───────────────────────────────────────────────────
+
+// Review queue: a Google Calendar was pulled during sync but didn't match
+// any active School by name. Cleared (resolvedAt set) once a later sync
+// run does find a match.
+model CalendarSyncIssue {
+  id              String    @id @default(cuid())
+  calendarId      String
+  calendarSummary String?
+  reason          String // e.g. "NO_MATCHING_SCHOOL"
+  detectedAt      DateTime  @default(now())
+  resolvedAt      DateTime?
+
+  @@index([resolvedAt])
+}
+
+// ─── Reporting ───────────────────────────────────────────────────────────────
+
+// 9-week grading-period quarters. Dates are placeholders until the real
+// MDCPS school-year calendar is entered — swapping them is a data change,
+// not a code change.
+model Quarter {
+  id         String   @id @default(cuid())
+  schoolYear String // e.g. "2026-27"
+  label      String // e.g. "Q1"
+  startDate  DateTime
+  endDate    DateTime
+
+  @@unique([schoolYear, label])
 }

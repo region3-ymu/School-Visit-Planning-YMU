@@ -1,379 +1,826 @@
 "use server";
 
-import { PrismaClient } from "@prisma/client";
-import { generateWeeklyPlan } from "@/lib/scoringEngine";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { requireUser, schoolRegionWhere } from "@/lib/auth-helpers";
 import { VisitInfo } from "@/lib/types";
 import { format, addDays, startOfWeek } from "date-fns";
+import { proposeVisitsForWeek } from "@/modules/visitPlanner";
+import { proposedVisitToVisitInfo } from "@/lib/visitPlannerAdapter";
+import { OpenRouteDistanceService } from "@/modules/visitPlanner";
+import type { StartLocationInput } from "@/lib/routing/types";
+import {
+  optimizeRoute,
+  computeRouteForOrder,
+} from "@/lib/routing/optimizeRoute";
+import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClient";
+import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
+import { decimalToNumber } from "@/lib/decimal";
+import { z } from "zod";
 
-const prisma = new PrismaClient();
+/** Prisma's Decimal isn't plain-serializable across the server/client boundary. */
+function serializeVisit<T extends { milesDriven: unknown }>(visit: T) {
+  return { ...visit, milesDriven: decimalToNumber(visit.milesDriven) };
+}
 
-export async function getDashboardStats() {
-    const totalSchools = await prisma.school.count();
+export async function getRegions() {
+  return await prisma.region.findMany({ orderBy: { name: "asc" } });
+}
 
-    const visitCounts = await prisma.visitLog.groupBy({
-        by: ['schoolId'],
-        _count: {
-            id: true,
-        },
-    });
+export async function getDashboardStats(regionFilter?: string | null) {
+  const session = await auth();
+  const user = requireUser(session);
+  const baseWhere = schoolRegionWhere(user);
+  const regionWhere =
+    user.role === "ADMIN" && regionFilter
+      ? { regionId: regionFilter }
+      : baseWhere;
 
-    const schools = await prisma.school.findMany({
-        select: { id: true, name: true }
-    });
+  const totalSchools = await prisma.school.count({ where: { ...regionWhere, active: true } });
 
-    const visitedSchoolsList = schools.map(school => {
-        const vc = visitCounts.find(v => v.schoolId === school.id);
-        return {
-            id: school.id,
-            name: school.name,
-            visitCount: vc ? vc._count.id : 0
-        };
-    }).sort((a, b) => b.visitCount - a.visitCount);
+  const visitCounts = await prisma.visit.groupBy({
+    by: ["schoolId"],
+    where: { status: "DONE", school: { ...regionWhere, active: true } },
+    _count: { id: true },
+  });
 
-    return {
-        totalActiveSchools: totalSchools,
-        // Since we are calculating "dueThiseWeek" dynamically via scoring engine, keep these as placeholders or compute fully.
-        dueThisWeek: Math.floor(totalSchools / 3),
-        overdue: 0,
-        recentCancellations: 0,
-        visitedSchoolsList
+  const schools = await prisma.school.findMany({
+    where: { ...regionWhere, active: true },
+    select: { id: true, name: true },
+  });
+
+  const visitedSchoolsList = schools
+    .map((school) => {
+      const vc = visitCounts.find((v) => v.schoolId === school.id);
+      return { id: school.id, name: school.name, visitCount: vc ? vc._count.id : 0 };
+    })
+    .sort((a, b) => b.visitCount - a.visitCount);
+
+  return {
+    totalActiveSchools: totalSchools,
+    dueThisWeek: Math.floor(totalSchools / 3),
+    overdue: 0,
+    recentCancellations: 0,
+    visitedSchoolsList,
+  };
+}
+
+export async function getSchools(regionFilter?: string | null) {
+  const session = await auth();
+  const user = requireUser(session);
+  const baseWhere = schoolRegionWhere(user);
+  const regionWhere =
+    user.role === "ADMIN" && regionFilter
+      ? { regionId: regionFilter }
+      : baseWhere;
+
+  return await prisma.school.findMany({
+    where: { ...regionWhere, active: true },
+    orderBy: { name: "asc" },
+  });
+}
+
+export async function getWeeklyPlan(
+  weekStartDateIso: string,
+  manualOverrides: Partial<VisitInfo>[] = [],
+  maxVisitsPerWeek: number = 12,
+  regionFilter?: string | null
+): Promise<VisitInfo[]> {
+  const session = await auth();
+  const user = requireUser(session);
+
+  // Determine the effective regionId: RMs use their own region, Admins may filter
+  const regionId: string | undefined =
+    user.role === "ADMIN" && regionFilter
+      ? regionFilter
+      : user.regionId ?? undefined;
+
+  const date = new Date(weekStartDateIso);
+  const weekStart = startOfWeek(date, { weekStartsOn: 1 });
+
+  const distanceService =
+    process.env.OPENROUTE_SERVICE_API_KEY ? new OpenRouteDistanceService() : undefined;
+
+  const proposed = await proposeVisitsForWeek(prisma, weekStart, {
+    regionId,
+    maxVisitsPerWeek,
+    distanceService,
+  });
+
+  let plan: VisitInfo[] = proposed.map(proposedVisitToVisitInfo);
+
+  // Apply skips from DB and manual overrides
+  const skippedInDb = await prisma.visit.findMany({
+    where: {
+      status: "SKIPPED",
+      plannedStartDateTime: { gte: weekStart, lt: addDays(weekStart, 5) },
+    },
+    select: { schoolId: true, plannedStartDateTime: true },
+  });
+  const skipSet = new Set(
+    skippedInDb.map((s) => `${s.schoolId}:${format(s.plannedStartDateTime, "yyyy-MM-dd")}`)
+  );
+  for (const o of manualOverrides) {
+    if (o.isSkipped && o.schoolId && o.date) {
+      skipSet.add(`${o.schoolId}:${format(new Date(o.date), "yyyy-MM-dd")}`);
+    }
+  }
+  plan = plan.filter((v) => !skipSet.has(`${v.schoolId}:${format(v.date, "yyyy-MM-dd")}`));
+
+  // Apply pinned overrides
+  for (const o of manualOverrides) {
+    if (o.isPinned && o.schoolId && o.date) {
+      const key = `${o.schoolId}:${format(new Date(o.date), "yyyy-MM-dd")}`;
+      if (plan.some((v) => `${v.schoolId}:${format(v.date, "yyyy-MM-dd")}` === key)) continue;
+      const school = await prisma.school.findUnique({ where: { id: o.schoolId } });
+      if (school) {
+        plan = plan.filter((v) => v.schoolId !== o.schoolId || v.isCompleted);
+        plan.push({
+          schoolId: school.id,
+          schoolName: school.name,
+          zipCode: school.zipCode,
+          date: new Date(o.date),
+          score: 1000,
+          reason: "Pinned manually",
+          startTime: o.startTime ?? "09:00",
+          endTime: o.endTime ?? "10:00",
+          isPinned: true,
+          isCompleted: false,
+          viableOptionsThisWeek: [],
+        });
+      }
+    }
+  }
+
+  // Overlay completed visits from DB
+  const visitsDoneWeek = await prisma.visit.findMany({
+    where: {
+      status: "DONE",
+      plannedStartDateTime: { gte: weekStart, lt: addDays(weekStart, 5) },
+      ...(regionId ? { school: { regionId } } : {}),
+    },
+    include: { school: true },
+  });
+  for (const v of visitsDoneWeek) {
+    const d = v.plannedStartDateTime;
+    const idx = plan.findIndex(
+      (p) =>
+        p.schoolId === v.schoolId &&
+        format(p.date, "yyyy-MM-dd") === format(d, "yyyy-MM-dd")
+    );
+    const completed: VisitInfo = {
+      schoolId: v.schoolId,
+      schoolName: v.school.name,
+      zipCode: v.school.zipCode,
+      date: d,
+      score: 0,
+      reason: v.reason ?? "Completed",
+      startTime: "Done",
+      endTime: "Done",
+      isPinned: false,
+      isCompleted: true,
     };
+    if (idx >= 0) plan[idx] = completed;
+    else plan.push(completed);
+  }
+
+  // Populate viableOptionsThisWeek for each school in the plan
+  const schoolIdsInPlan = [...new Set(plan.map((v) => v.schoolId))];
+  const optionsBySchool = await Promise.all(
+    schoolIdsInPlan.map((schoolId) =>
+      getSchoolCalendarOptionsForWeek(schoolId, weekStart.toISOString())
+    )
+  );
+  const optionsBySchoolMap = new Map(
+    schoolIdsInPlan.map((id, i) => [id, optionsBySchool[i] ?? []])
+  );
+  for (const v of plan) {
+    v.viableOptionsThisWeek = optionsBySchoolMap.get(v.schoolId) ?? [];
+  }
+
+  plan.sort((a, b) => {
+    const da = new Date(a.date).getTime();
+    const db = new Date(b.date).getTime();
+    if (da !== db) return da - db;
+    if (a.isCompleted) return -1;
+    if (b.isCompleted) return 1;
+    const timeA = (a.startTime ?? "00:00") === "Done" ? 9999 : parseInt(a.startTime!.replace(":", ""), 10);
+    const timeB = (b.startTime ?? "00:00") === "Done" ? 9999 : parseInt(b.startTime!.replace(":", ""), 10);
+    return timeA - timeB;
+  });
+
+  return plan;
 }
 
-export async function getSchools() {
-    return await prisma.school.findMany({
-        orderBy: { name: "asc" },
+export async function getSchoolOptionsForWeek(
+  schoolId: string,
+  weekStartDateIso: string
+): Promise<import("@/lib/types").ViableOption[]> {
+  const date = new Date(weekStartDateIso);
+  const start = startOfWeek(date, { weekStartsOn: 1 });
+  const weekEnd = addDays(start, 5);
+  const weekDates = Array.from({ length: 5 }, (_, i) => addDays(start, i));
+
+  const school = await prisma.school.findUnique({ where: { id: schoolId } });
+  if (!school) return [];
+
+  type ViableOption = import("@/lib/types").ViableOption;
+  const seen = new Set<string>();
+  const merged: ViableOption[] = [];
+  const addOption = (opt: ViableOption) => {
+    const key = `${opt.date}-${opt.rule.start}-${opt.rule.end}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(opt);
+  };
+
+  const sessions = await prisma.classSession.findMany({
+    where: { schoolId, startDateTime: { gte: start }, endDateTime: { lt: weekEnd } },
+    include: { subject: true },
+  });
+  const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
+  for (const s of sessions) {
+    if (isAfterschool(s.subject?.name ?? "")) continue;
+    addOption({
+      date: format(s.startDateTime, "yyyy-MM-dd"),
+      rule: {
+        start: format(s.startDateTime, "HH:mm"),
+        end: format(s.endDateTime, "HH:mm"),
+        class: s.subject.name,
+      },
     });
-}
+  }
 
-export async function getWeeklyPlan(weekStartDateIso: string, manualOverrides: Partial<VisitInfo>[] = [], maxVisitsPerWeek: number = 5) {
-    const date = new Date(weekStartDateIso);
-    return await generateWeeklyPlan(date, manualOverrides, maxVisitsPerWeek);
-}
+  let rules: any[] = [];
+  try { rules = JSON.parse(school.availability); } catch { return merged; }
+  if (!Array.isArray(rules) || rules.length === 0) return merged;
 
-export async function getSchoolOptionsForWeek(schoolId: string, weekStartDateIso: string): Promise<import('@/lib/types').ViableOption[]> {
-    const date = new Date(weekStartDateIso);
-    const start = startOfWeek(date, { weekStartsOn: 1 });
-    const weekDates = Array.from({ length: 5 }).map((_, i) => addDays(start, i));
-
-    const calDays = await prisma.calendarDay.findMany({ where: { date: { in: weekDates } } });
-    const school = await prisma.school.findUnique({ where: { id: schoolId } });
-    if (!school) return [];
-
-    let rules: any[] = [];
-    try { rules = JSON.parse(school.availability); } catch (e) { return []; }
-
-    const options: import('@/lib/types').ViableOption[] = [];
-
-    weekDates.forEach((d, idx) => {
-        const cal = calDays.find(c => c.date.getTime() === d.getTime());
-        const dayType = cal?.dayType || (idx % 2 === 0 ? "A" : "B");
-        if (dayType === "Planning" || dayType === "Holiday") return;
-
-        rules.forEach(r => {
-            let matches = false;
-            if (r.weekday) matches = format(d, "EEEE") === r.weekday;
-            else if (r.dayType) matches = dayType === r.dayType;
-            else matches = true;
-
-            if (matches) {
-                options.push({ date: format(d, 'yyyy-MM-dd'), rule: r });
-            }
-        });
-    });
-
-    return options;
-}
-
-export async function seedSchoolsMock() {
-    const existingCount = await prisma.school.count();
-    if (existingCount > 0) {
-        return { success: true, count: existingCount, skipped: true };
+  for (const d of weekDates) {
+    const weekdayName = format(d, "EEEE");
+    for (const r of rules) {
+      if (/afterschool/i.test(r?.class ?? "")) continue;
+      if (r.weekday && r.weekday !== weekdayName) continue;
+      if (!r.weekday) continue;
+      addOption({ date: format(d, "yyyy-MM-dd"), rule: r });
     }
+  }
 
-    // Seed A/B Calendar for 2025-26 School Year
-    const calendarData = [];
-    const startDate = new Date('2025-08-18'); // Start of school year
-    
-    for (let week = 0; week < 40; week++) { // 40 weeks of school
-        const weekStart = addDays(startDate, week * 7);
-        
-        for (let day = 0; day < 5; day++) { // Monday-Friday
-            const currentDate = addDays(weekStart, day);
-            
-            // Skip holidays and weekends
-            if (currentDate.getDay() === 0 || currentDate.getDay() === 6) continue;
-            
-            // A/B Day pattern: Alternating A/B days with some exceptions
-            let dayType: string;
-            const dayOfWeek = currentDate.getDay();
-            const weekOfYear = Math.floor((currentDate.getTime() - new Date(currentDate.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
-            
-            // Standard pattern: Monday/Wednesday = A, Tuesday/Thursday = B, Friday alternates
-            if (dayOfWeek === 1 || dayOfWeek === 3) { // Monday, Wednesday
-                dayType = "A";
-            } else if (dayOfWeek === 2 || dayOfWeek === 4) { // Tuesday, Thursday
-                dayType = "B";
-            } else { // Friday - alternate
-                dayType = weekOfYear % 2 === 0 ? "A" : "B";
-            }
-            
-            calendarData.push({
-                date: currentDate,
-                dayType: dayType as "A" | "B",
-                description: `${dayType} Day`
-            });
-        }
-    }
-
-    // Insert calendar days
-    for (const calDay of calendarData) {
-        await prisma.calendarDay.upsert({
-            where: { date: calDay.date },
-            update: { dayType: calDay.dayType, description: calDay.description },
-            create: {
-                date: calDay.date,
-                dayType: calDay.dayType,
-                description: calDay.description
-            }
-        });
-    }
-
-    // Keep strict dates using specific UTC strings for consistency
-    const tz = "T12:00:00Z";
-
-    const schoolsData = [
-        {
-            name: "Young Men’s Preparatory Academy",
-            zipCode: "33127",
-            address: "3001 NW 2nd Ave, Miami, FL 33127",
-            lat: 25.8049,
-            lng: -80.1991,
-            frequencyTarget: "weekly",
-            visits: ["2026-02-26" + tz],
-            rules: [
-                { weekday: "Monday", start: "12:40", end: "14:10", class: "Modern Band and Drumline" },
-                { weekday: "Thursday", start: "12:40", end: "14:10", class: "Modern Band and Drumline" },
-                { weekday: "Wednesday", start: "10:55", end: "12:35", class: "Modern Band and Drumline" }
-            ]
-        },
-        {
-            name: "West Little River K-8",
-            zipCode: "33147",
-            address: "2450 NW 84th St, Miami, FL 33147",
-            lat: 25.8504,
-            lng: -80.2386,
-            frequencyTarget: "bi-weekly",
-            visits: ["2026-03-04" + tz, "2026-03-06" + tz],
-            rules: [
-                { dayType: "A", start: "13:40", end: "15:05", class: "Beggining Band" },
-                { dayType: "B", start: "13:40", end: "15:05", class: "Drumline" },
-                { weekday: "Wednesday", start: "12:42", end: "13:50", class: "Band/Drumline" }
-            ]
-        },
-        {
-            name: "Coral Gables Senior High School",
-            zipCode: "33146",
-            address: "450 Bird Rd, Coral Gables, FL 33146",
-            lat: 25.7336,
-            lng: -80.2635,
-            frequencyTarget: "bi-weekly",
-            visits: ["2026-02-25" + tz],
-            rules: [
-                { dayType: "A", start: "09:00", end: "10:30", class: "Guitar 1" }
-            ]
-        },
-        {
-            name: "Horace Mann Middle School",
-            zipCode: "33150",
-            address: "8950 NW 2nd Ave, El Portal, FL 33150",
-            lat: 25.8568,
-            lng: -80.1983,
-            frequencyTarget: "monthly",
-            visits: ["2026-02-24" + tz, "2026-03-06" + tz],
-            rules: [
-                { dayType: "B", start: "10:45", end: "12:10", class: "Beginning Band" },
-                { dayType: "B", start: "14:25", end: "15:50", class: "Music Production" }
-            ]
-        },
-        {
-            name: "Miami Edison Senior High School",
-            zipCode: "33127",
-            address: "6161 NW 5th Ct, Miami, FL 33127",
-            lat: 25.8320,
-            lng: -80.2018,
-            frequencyTarget: "monthly",
-            visits: ["2026-02-25" + tz, "2026-03-05" + tz],
-            rules: [
-                { dayType: "A", start: "10:30", end: "12:00", class: "Music Production" }
-            ]
-        },
-        {
-            name: "Brownsville Middle School",
-            zipCode: "33142",
-            address: "4899 NW 24th Ave, Miami, FL 33142",
-            lat: 25.8174,
-            lng: -80.2335,
-            frequencyTarget: "weekly",
-            visits: ["2026-03-05" + tz],
-            rules: [
-                { dayType: "A", start: "09:25", end: "10:50", class: "Drumline" },
-                { dayType: "B", start: "09:25", end: "10:50", class: "Drumline" }
-            ]
-        },
-        {
-            name: "Edison Park K-8",
-            zipCode: "33127",
-            address: "500 NW 67th St, Miami, FL 33127",
-            lat: 25.8368,
-            lng: -80.2081,
-            frequencyTarget: "weekly",
-            visits: ["2026-02-26" + tz, "2026-03-04" + tz],
-            rules: [
-                { dayType: "B", start: "11:40", end: "13:35", class: "Modern Band" },
-                { dayType: "B", start: "13:40", end: "15:05", class: "Drum Line" },
-                { weekday: "Wednesday", start: "11:05", end: "12:40", class: "Modern Band" },
-                { weekday: "Wednesday", start: "12:45", end: "13:50", class: "Drum Line" }
-            ]
-        },
-        {
-            name: "Georgia Jones-Ayers Middle School",
-            zipCode: "33142",
-            address: "1331 NW 46th St, Miami, FL 33142",
-            lat: 25.8143,
-            lng: -80.2185,
-            frequencyTarget: "bi-weekly",
-            visits: [],
-            rules: [
-                { dayType: "B", start: "09:20", end: "10:45", class: "Begining Band" },
-                { dayType: "A", start: "12:55", end: "14:20", class: "Drumline" }
-            ]
-        },
-        {
-            name: "Kelsey L Pharr Elementary School",
-            zipCode: "33142",
-            address: "2000 NW 46th St, Miami, FL 33142",
-            lat: 25.8145,
-            lng: -80.2291,
-            frequencyTarget: "monthly",
-            visits: [],
-            rules: [
-                { weekday: "Monday", start: "14:05", end: "15:05", class: "Pitch & Rhythm" },
-                { weekday: "Friday", start: "14:05", end: "15:05", class: "Pitch & Rhythm" }
-            ]
-        },
-        {
-            name: "Citrus Grove K-8",
-            zipCode: "33125",
-            address: "2121 NW 5th St, Miami, FL 33125",
-            lat: 25.7761,
-            lng: -80.2037,
-            frequencyTarget: "weekly",
-            visits: [],
-            rules: [
-                { dayType: "A", start: "12:20", end: "13:40", class: "Begining Band" },
-                { dayType: "B", start: "12:20", end: "13:40", class: "Begining Band" },
-                { weekday: "Wednesday", start: "11:45", end: "12:45", class: "Begining Band" }
-            ]
-        },
-        {
-            name: "MorningSide K-8",
-            zipCode: "33138",
-            address: "6620 NE 5th Ave, Miami, FL 33138",
-            lat: 25.8360,
-            lng: -80.1856,
-            frequencyTarget: "bi-weekly",
-            visits: ["2026-02-24" + tz, "2026-03-05" + tz],
-            rules: [
-                { dayType: "A", start: "13:15", end: "15:05", class: "Music Production" },
-                { weekday: "Wednesday", start: "11:47", end: "12:35", class: "Music Production" },
-                { dayType: "B", start: "13:15", end: "15:05", class: "Music Production" },
-                { weekday: "Wednesday", start: "13:05", end: "13:50", class: "Music Production" }
-            ]
-        }
-    ];
-
-    for (const s of schoolsData) {
-        const school = await prisma.school.create({
-            data: {
-                name: s.name,
-                zipCode: s.zipCode,
-                lat: s.lat,
-                lng: s.lng,
-                frequencyTarget: s.frequencyTarget,
-                availability: JSON.stringify(s.rules),
-            }
-        });
-
-        // Insert provided manual visit logs
-        for (const visitIso of s.visits) {
-            await prisma.visitLog.create({
-                data: {
-                    schoolId: school.id,
-                    date: new Date(visitIso),
-                    notes: "Historical Visit Pre-seeded"
-                }
-            });
-        }
-    }
-
-    return { success: true, count: schoolsData.length };
+  return merged;
 }
 
-export async function updateSchoolSettings(id: string, data: { frequencyTarget: string, availability: string }) {
-    JSON.parse(data.availability); // Validate JSON format
-    return await prisma.school.update({
-        where: { id },
-        data: {
-            frequencyTarget: data.frequencyTarget,
-            availability: data.availability
-        }
-    });
+export async function getSchoolCalendarOptionsForWeek(
+  schoolId: string,
+  weekStartDateIso: string
+): Promise<import("@/lib/types").ViableOption[]> {
+  const date = new Date(weekStartDateIso);
+  const start = startOfWeek(date, { weekStartsOn: 1 });
+  const weekEnd = addDays(start, 5);
+
+  const sessions = await prisma.classSession.findMany({
+    where: { schoolId, startDateTime: { gte: start }, endDateTime: { lt: weekEnd } },
+    include: { subject: true },
+    orderBy: { startDateTime: "asc" },
+  });
+
+  const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
+  return sessions
+    .filter((s) => !isAfterschool(s.subject?.name ?? ""))
+    .map((s) => ({
+      date: format(s.startDateTime, "yyyy-MM-dd"),
+      rule: {
+        start: format(s.startDateTime, "HH:mm"),
+        end: format(s.endDateTime, "HH:mm"),
+        class: s.subject.name,
+      },
+    }));
 }
 
-export async function confirmVisit(schoolId: string, dateIso: string, notes: string = "Completed via Planner") {
-    const date = new Date(dateIso);
-    return await prisma.visitLog.create({
-        data: {
-            schoolId,
-            date,
-            notes
-        }
-    });
+
+const originCoordsSchema = z.object({
+  lat: z.number(),
+  lng: z.number(),
+  label: z.string().optional(),
+});
+
+const observationRatingSchema = z.enum(["NEEDS_SUPPORT", "DEVELOPING", "MEETS", "EXCEEDS"]);
+
+const confirmVisitSchema = z
+  .object({
+    // Only used for the first visit of the day (client asks the RM where
+    // they're starting from). Every subsequent visit that day is chained
+    // server-side from the previous confirmed visit and this is ignored.
+    origin: originCoordsSchema.optional(),
+    visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
+    outcome: z.enum(["GOOD", "REGULAR"]),
+    outcomeNotes: z.string().max(2000).optional(),
+    principalNotes: z.string().max(2000).optional(),
+    hasInstrumentRequest: z.boolean().default(false),
+    instrumentRequestDetails: z.string().max(2000).optional(),
+    geofenceDistanceM: z.number().optional(),
+    geofenceOverridden: z.boolean().default(false),
+    // Teacher observation — shown when visitedWith includes YMU_TEACHER.
+    // Each domain is independently skippable.
+    obsPlanningPrep: observationRatingSchema.optional(),
+    obsCultureManagement: observationRatingSchema.optional(),
+    obsInstructionMusicianship: observationRatingSchema.optional(),
+    obsEngagementEvidence: observationRatingSchema.optional(),
+    obsProfessionalismGrowth: observationRatingSchema.optional(),
+    obsNotes: z.string().max(2000).optional(),
+  })
+  .refine((data) => data.outcome !== "REGULAR" || !!data.outcomeNotes?.trim(), {
+    message: "outcomeNotes is required when outcome is REGULAR",
+    path: ["outcomeNotes"],
+  })
+  .refine((data) => !data.hasInstrumentRequest || !!data.instrumentRequestDetails?.trim(), {
+    message: "instrumentRequestDetails is required when hasInstrumentRequest is true",
+    path: ["instrumentRequestDetails"],
+  });
+
+function dayRangeFor(date: Date): { dayStart: Date; dayEnd: Date } {
+  const dayStart = new Date(date);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(date);
+  dayEnd.setHours(23, 59, 59, 999);
+  return { dayStart, dayEnd };
 }
 
-export async function getVisitHistory() {
-    return await prisma.visitLog.findMany({
-        include: {
-            school: true
-        },
-        orderBy: { date: 'desc' }
+/**
+ * The RM's own most recently confirmed visit earlier the same day (i.e. the
+ * previous stop in the route they actually drove). Ordered by createdAt
+ * (actual confirmation order), not plannedStartDateTime — every confirmed
+ * visit is stamped with the same fixed 09:00-10:00 planned slot, so that
+ * field can't be used to find "the previous stop".
+ */
+async function findPreviousVisitToday(
+  visitedById: string,
+  dayStart: Date,
+  dayEnd: Date
+): Promise<{ lat: number; lng: number; label: string } | null> {
+  const prevVisit = await prisma.visit.findFirst({
+    where: {
+      visitedById,
+      status: "DONE",
+      plannedStartDateTime: { gte: dayStart, lt: dayEnd },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { school: { select: { name: true, lat: true, lng: true } } },
+  });
+  if (prevVisit?.school.lat != null && prevVisit.school.lng != null) {
+    return { lat: prevVisit.school.lat, lng: prevVisit.school.lng, label: prevVisit.school.name };
+  }
+  return null;
+}
+
+/**
+ * Whether confirming a visit on `dateIso` would be the RM's first of the
+ * day (in which case the UI should ask where they're starting from) or a
+ * later one (mileage auto-chains from the previous confirmed visit, no
+ * question needed). Returns the previous stop's name when chaining applies.
+ */
+export async function getPreviousVisitToday(dateIso: string): Promise<{ label: string } | null> {
+  const session = await auth();
+  const user = requireUser(session);
+  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
+  const prev = await findPreviousVisitToday(user.id, dayStart, dayEnd);
+  return prev ? { label: prev.label } : null;
+}
+
+/**
+ * Resolves the origin for a visit's mileage calculation: the chained
+ * previous visit if one exists (always wins — the client can't override an
+ * in-progress route), otherwise the origin the client supplied for the
+ * first visit of the day, otherwise the RM's saved home as a last resort.
+ */
+async function resolveVisitOrigin(
+  visitedById: string,
+  dayStart: Date,
+  dayEnd: Date,
+  clientOrigin?: { lat: number; lng: number; label?: string }
+): Promise<{ lat: number; lng: number; label: string } | null> {
+  const chained = await findPreviousVisitToday(visitedById, dayStart, dayEnd);
+  if (chained) return chained;
+
+  if (clientOrigin) {
+    return { lat: clientOrigin.lat, lng: clientOrigin.lng, label: clientOrigin.label ?? "Custom address" };
+  }
+
+  const homeUser = await prisma.user.findUnique({
+    where: { id: visitedById },
+    select: { homeLat: true, homeLng: true },
+  });
+  if (homeUser?.homeLat != null && homeUser?.homeLng != null) {
+    return { lat: homeUser.homeLat, lng: homeUser.homeLng, label: "Home" };
+  }
+
+  return null;
+}
+
+export async function confirmVisit(schoolId: string, dateIso: string, formData: unknown) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const parsed = confirmVisitSchema.safeParse(formData);
+  if (!parsed.success) throw new Error(parsed.error.message);
+  const data = parsed.data;
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: { lat: true, lng: true },
+  });
+  if (!school) throw new Error("School not found");
+
+  const date = new Date(dateIso);
+  const plannedStart = new Date(date);
+  plannedStart.setHours(9, 0, 0, 0);
+  const plannedEnd = new Date(date);
+  plannedEnd.setHours(10, 0, 0, 0);
+  const { dayStart, dayEnd } = dayRangeFor(date);
+
+  // Mileage is auto-derived from the RM's own route order that day (previous
+  // confirmed visit → this school). For the first visit of the day, the
+  // client already asked where they're starting from (data.origin); that's
+  // only used when there's no previous visit to chain from. Best-effort: if
+  // no origin is available at all, the visit still confirms with
+  // milesDriven unset.
+  let milesDriven: number | null = null;
+  let originLabel: string | null = null;
+
+  if (school.lat != null && school.lng != null) {
+    try {
+      const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
+      if (origin) {
+        originLabel = origin.label;
+        const matrix = await getCachedTravelMatrix(
+          [{ lat: origin.lat, lng: origin.lng }, { lat: school.lat, lng: school.lng }],
+          prisma,
+          new OpenRouteDistanceService()
+        );
+        const distanceM = matrix.distances[0]?.[1];
+        if (distanceM != null && Number.isFinite(distanceM)) {
+          milesDriven = distanceM / 1609.344;
+        }
+      }
+    } catch (err) {
+      console.error("confirmVisit mileage calc failed:", err);
+    }
+  }
+
+  const visit = await prisma.$transaction(async (tx) => {
+    // Cancel any PLANNED visit for this school+day before writing DONE
+    await tx.visit.updateMany({
+      where: {
+        schoolId,
+        status: "PLANNED",
+        plannedStartDateTime: { gte: plannedStart, lte: plannedEnd },
+      },
+      data: { status: "CANCELLED" },
     });
+    return tx.visit.create({
+      data: {
+        schoolId,
+        plannedStartDateTime: plannedStart,
+        plannedEndDateTime: plannedEnd,
+        status: "DONE",
+        reason: "Confirmed via Weekly Planner",
+        visitedById: user.id,
+        milesDriven: milesDriven ?? undefined,
+        originLabel: originLabel ?? undefined,
+        outcome: data.outcome,
+        outcomeNotes: data.outcomeNotes ?? undefined,
+        visitedWith: data.visitedWith,
+        principalNotes: data.principalNotes ?? undefined,
+        hasInstrumentRequest: data.hasInstrumentRequest,
+        instrumentRequestDetails: data.instrumentRequestDetails ?? undefined,
+        geofenceDistanceM: data.geofenceDistanceM ?? undefined,
+        geofenceOverridden: data.geofenceOverridden,
+        obsPlanningPrep: data.obsPlanningPrep,
+        obsCultureManagement: data.obsCultureManagement,
+        obsInstructionMusicianship: data.obsInstructionMusicianship,
+        obsEngagementEvidence: data.obsEngagementEvidence,
+        obsProfessionalismGrowth: data.obsProfessionalismGrowth,
+        obsNotes: data.obsNotes ?? undefined,
+      },
+    });
+  });
+
+  // Server actions can only return plain-serializable values to Client
+  // Components — Prisma's Decimal type isn't, so convert it here.
+  return { id: visit.id, milesDriven: decimalToNumber(visit.milesDriven) };
+}
+
+export async function skipVisit(schoolId: string, dateIso: string) {
+  const date = new Date(dateIso);
+  const plannedStart = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
+  );
+  const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  const visit = await prisma.visit.create({
+    data: {
+      schoolId,
+      plannedStartDateTime: plannedStart,
+      plannedEndDateTime: plannedEnd,
+      status: "SKIPPED",
+      reason: "Skipped by user",
+    },
+  });
+  return serializeVisit(visit);
+}
+
+export async function getVisitHistory(regionFilter?: string | null) {
+  const session = await auth();
+  const user = requireUser(session);
+  const baseWhere = schoolRegionWhere(user);
+
+  const effectiveRegionId =
+    user.role === "ADMIN" && regionFilter
+      ? regionFilter
+      : baseWhere.regionId !== undefined
+      ? baseWhere.regionId
+      : undefined;
+
+  const visits = await prisma.visit.findMany({
+    where: {
+      status: "DONE",
+      ...(effectiveRegionId !== undefined
+        ? { school: { regionId: effectiveRegionId } }
+        : {}),
+    },
+    include: { school: true },
+    orderBy: { plannedStartDateTime: "desc" },
+  });
+
+  // Normalize to the shape VisitHistory.tsx expects
+  return visits.map((v) => ({
+    id: v.id,
+    schoolId: v.schoolId,
+    date: v.plannedStartDateTime,
+    notes: v.reason,
+    school: v.school,
+  }));
 }
 
 export async function addManualVisit(schoolId: string, dateIso: string, notes: string) {
-    const date = new Date(dateIso);
-    return await prisma.visitLog.create({
-        data: {
-            schoolId,
-            date,
-            notes
-        }
-    });
+  const date = new Date(dateIso);
+  const plannedStart = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
+  );
+  const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  const visit = await prisma.visit.create({
+    data: {
+      schoolId,
+      plannedStartDateTime: plannedStart,
+      plannedEndDateTime: plannedEnd,
+      status: "DONE",
+      reason: notes,
+    },
+  });
+  return serializeVisit(visit);
 }
 
 export async function deleteVisitLog(id: string) {
-    return await prisma.visitLog.delete({
-        where: { id }
-    });
+  const visit = await prisma.visit.delete({ where: { id } });
+  return serializeVisit(visit);
 }
 
 export async function editVisitLog(id: string, newDateIso: string, newNotes: string) {
-    return await prisma.visitLog.update({
-        where: { id },
-        data: {
-            date: new Date(newDateIso),
-            notes: newNotes
-        }
+  const date = new Date(newDateIso);
+  const plannedStart = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
+  );
+  const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  const visit = await prisma.visit.update({
+    where: { id },
+    data: {
+      plannedStartDateTime: plannedStart,
+      plannedEndDateTime: plannedEnd,
+      reason: newNotes,
+    },
+  });
+  return serializeVisit(visit);
+}
+
+export async function getSchoolTeachers(schoolId: string) {
+  return await prisma.teacher.findMany({
+    where: { school: { id: schoolId } },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {
+  return await prisma.teacher.create({
+    data: {
+      school: { connect: { id: schoolId } },
+      name: data.name,
+      subjects: data.subjects ?? null,
+    },
+  });
+}
+
+export async function updateTeacher(teacherId: string, data: { name?: string; subjects?: string }) {
+  return await prisma.teacher.update({
+    where: { id: teacherId },
+    data: {
+      ...(data.name != null ? { name: data.name } : {}),
+      ...(data.subjects != null ? { subjects: data.subjects } : {}),
+    },
+  });
+}
+
+export async function deleteTeacher(teacherId: string) {
+  return await prisma.teacher.delete({ where: { id: teacherId } });
+}
+
+// ─── VisitRule actions ─────────────────────────────────────────────────────────
+
+const visitRuleSchema = z.object({
+  frequencyType: z.enum(["WEEKLY", "BIWEEKLY", "EVERY_3_WEEKS", "MONTHLY"]),
+  reason: z.string().max(500).optional(),
+  effectiveFrom: z.string().optional(), // ISO date string
+});
+
+export async function getVisitRulesForSchool(schoolId: string) {
+  return await prisma.visitRule.findMany({
+    where: { schoolId },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+export async function createVisitRule(schoolId: string, formData: unknown) {
+  const session = await auth();
+  requireUser(session);
+
+  const parsed = visitRuleSchema.safeParse(formData);
+  if (!parsed.success) throw new Error(parsed.error.message);
+
+  const { frequencyType, reason, effectiveFrom } = parsed.data;
+
+  // Archive any currently active rule for this school
+  await prisma.visitRule.updateMany({
+    where: { schoolId, effectiveTo: null },
+    data: { effectiveTo: new Date() },
+  });
+
+  return await prisma.visitRule.create({
+    data: {
+      schoolId,
+      frequencyType,
+      reason: reason ?? null,
+      effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : new Date(),
+      effectiveTo: null,
+    },
+  });
+}
+
+export async function archiveVisitRule(ruleId: string) {
+  const session = await auth();
+  requireUser(session);
+  return await prisma.visitRule.update({
+    where: { id: ruleId },
+    data: { effectiveTo: new Date() },
+  });
+}
+
+export async function updateVisitRule(ruleId: string, formData: unknown) {
+  const session = await auth();
+  requireUser(session);
+
+  const parsed = visitRuleSchema.safeParse(formData);
+  if (!parsed.success) throw new Error(parsed.error.message);
+
+  const { frequencyType, reason, effectiveFrom } = parsed.data;
+  return await prisma.visitRule.update({
+    where: { id: ruleId },
+    data: {
+      frequencyType,
+      reason: reason ?? null,
+      effectiveFrom: effectiveFrom ? new Date(effectiveFrom) : undefined,
+    },
+  });
+}
+
+// ─── Route optimization (Phase 2b) ────────────────────────────────────────────
+
+export type DayRouteResult = Awaited<ReturnType<typeof getOptimalRouteForDay>>;
+
+export async function getOptimalRouteForDay(
+  dateIso: string,
+  schoolIds: string[],
+  startLocation: StartLocationInput,
+  options?: { manualOrder?: string[]; departureTime?: string; reoptimize?: boolean }
+) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  if (!process.env.OPENROUTE_SERVICE_API_KEY) {
+    throw new Error("OPENROUTE_SERVICE_API_KEY is not configured");
+  }
+
+  if (schoolIds.length === 0) {
+    throw new Error("Select at least one school to visit");
+  }
+
+  const baseWhere = schoolRegionWhere(user);
+  const schools = await prisma.school.findMany({
+    where: { id: { in: schoolIds }, ...baseWhere, active: true },
+  });
+
+  if (schools.length !== schoolIds.length) {
+    const foundIds = new Set(schools.map((s) => s.id));
+    const missingIds = schoolIds.filter((id) => !foundIds.has(id));
+    // Missing IDs usually mean stale localStorage references to schools that were
+    // deleted or moved to a different region. Refreshing the weekly plan clears them.
+    throw new Error(
+      `${missingIds.length} school(s) not found or not in your region. ` +
+      `Try refreshing the weekly plan. Missing IDs: ${missingIds.join(", ")}`
+    );
+  }
+
+  const missingCoords = schools.filter((s) => s.lat == null || s.lng == null);
+  if (missingCoords.length > 0) {
+    throw new Error(
+      `Missing coordinates for: ${missingCoords.map((s) => s.name).join(", ")}`
+    );
+  }
+
+  let start: { lat: number; lng: number; label?: string };
+  if (startLocation.type === "coordinates") {
+    start = {
+      lat: startLocation.lat,
+      lng: startLocation.lng,
+      label: startLocation.label,
+    };
+  } else {
+    const geocoded = await geocodeAddress(startLocation.address);
+    start = geocoded;
+  }
+
+  const stopInputs = schools.map((s) => ({
+    schoolId: s.id,
+    schoolName: s.name,
+    lat: s.lat!,
+    lng: s.lng!,
+  }));
+
+  const departureTime = options?.departureTime ?? "08:00";
+  const useManualOrder =
+    options?.manualOrder &&
+    options.manualOrder.length === schoolIds.length &&
+    !options.reoptimize;
+
+  let route;
+  if (useManualOrder) {
+    const orderMap = new Map(stopInputs.map((s) => [s.schoolId, s]));
+    const orderedStops = options.manualOrder!.map((id) => {
+      const stop = orderMap.get(id);
+      if (!stop) throw new Error(`Unknown school in manual order: ${id}`);
+      return stop;
     });
+    route = await computeRouteForOrder(prisma, start, orderedStops, departureTime);
+  } else {
+    route = await optimizeRoute(prisma, start, stopInputs, departureTime);
+  }
+
+  const waypoints = [
+    { lat: route.start.lat, lng: route.start.lng },
+    ...route.stops.map((s) => ({ lat: s.lat, lng: s.lng })),
+  ];
+  const polyline = await getDrivingPolyline(waypoints);
+
+  return {
+    date: dateIso,
+    ...route,
+    polyline,
+  };
+}
+
+// ─── Home location (per-user, used for mileage/route origin) ────────────────
+
+export async function getQuarters() {
+  return await prisma.quarter.findMany({ orderBy: { startDate: "asc" } });
+}
+
+export async function getMyHomeLocation() {
+  const session = await auth();
+  const user = requireUser(session);
+  const record = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { homeAddress: true, homeLat: true, homeLng: true },
+  });
+  if (!record?.homeAddress || record.homeLat == null || record.homeLng == null) return null;
+  return { address: record.homeAddress, lat: record.homeLat, lng: record.homeLng };
+}
+
+export async function setMyHomeLocation(address: string) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const trimmed = address.trim();
+  if (!trimmed) throw new Error("Address is required");
+
+  const { lat, lng } = await geocodeAddress(trimmed);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { homeAddress: trimmed, homeLat: lat, homeLng: lng },
+  });
+  return { address: trimmed, lat, lng };
 }

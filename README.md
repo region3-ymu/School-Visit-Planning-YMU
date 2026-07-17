@@ -56,9 +56,12 @@ Open [http://localhost:3000](http://localhost:3000) to view the application.
 
 The application uses PostgreSQL with the following models:
 
-- **School**: School information, location, and availability rules
-- **CalendarDay**: A/B day schedule and holidays
-- **VisitLog**: Historical visit records
+- **School**: School information, location, availability rules, optional `googleCalendarId`
+- **Teacher**, **Subject**, **ClassSession**: Class schedules (synced from Google Calendar)
+- **VisitRule**: Per-school visit frequency (WEEKLY, BIWEEKLY, etc.) and priority
+- **Visit**: Planned/done/cancelled/skipped visits with time windows
+- **CalendarDay**: A/B day schedule and holidays (legacy)
+- **VisitLog**: Historical visit records (legacy, kept for compatibility)
 
 ## 🚀 Deployment
 
@@ -81,6 +84,7 @@ For detailed deployment instructions, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 - `npm run build` - Build for production
 - `npm run start` - Start production server
 - `npm run lint` - Run ESLint
+- `npm run sync-calendars:test` - Sync school calendars from Google Calendar (test only)
 
 ### Database Commands
 
@@ -123,12 +127,28 @@ The application includes AI-powered features for:
 
 ### Environment Variables
 
+See `.env.example`. Main variables:
+
 - `DATABASE_URL`: PostgreSQL connection string (required)
-- AI service API keys (optional, for AI features)
+- **Google Calendar API** (for calendar sync, do not use in production until validated):
+  - `GOOGLE_CALENDAR_CLIENT_ID`, `GOOGLE_CALENDAR_CLIENT_SECRET`, `GOOGLE_CALENDAR_REFRESH_TOKEN`
+  - Create OAuth 2.0 credentials in Google Cloud Console, enable Calendar API, and obtain a refresh token (e.g. via OAuth Playground with `https://www.googleapis.com/auth/calendar.readonly`).
+- **Visit planner work window**: `PLANNER_WORK_START=08:00`, `PLANNER_WORK_END=17:00` (HH:mm 24h).
+- **OpenRouteService** (for distance/route estimates in the planner): `OPENROUTE_SERVICE_API_KEY` (get a key at [openrouteservice.org](https://openrouteservice.org/)).
+
+### Calendar sync (test only)
+
+Run the sync script to import classes from Google Calendar into `ClassSession` (and match calendars to schools by name):
+
+```bash
+npm run sync-calendars:test
+```
+
+This is for testing only; do not use in production until validated.
 
 ### Prisma Configuration
 
-The database schema is defined in `prisma/schema.prisma` and uses PostgreSQL with the Neon cloud provider.
+The database schema is defined in `prisma/schema.prisma` and uses PostgreSQL. Apply migrations with `npx prisma migrate deploy`.
 
 ## 📄 License
 

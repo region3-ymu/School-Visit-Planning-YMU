@@ -41,3 +41,15 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# junk files
+out.txt
+prisma_err*.txt
+prisma_error*.txt
+ts_errors*.txt
+prisma/dev.db
+prisma/dev.db-journal
+archive/
+
+# CSV data files (contain school lists — keep local only)
+data/

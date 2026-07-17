@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { getDashboardStats } from "@/app/actions";
 import { Building2, CalendarX, ClockAlert, ClipboardList } from "lucide-react";
 
-export default function Dashboard() {
+export default function Dashboard({ regionFilter }: { regionFilter?: string | null }) {
     const [stats, setStats] = useState({
         totalActiveSchools: 0,
         dueThisWeek: 0,
@@ -14,8 +14,8 @@ export default function Dashboard() {
     });
 
     useEffect(() => {
-        getDashboardStats().then(setStats);
-    }, []);
+        getDashboardStats(regionFilter).then(setStats);
+    }, [regionFilter]);
 
     return (
         <div className="p-6">

@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getVisitHistory, addManualVisit, getSchools, deleteVisitLog, editVisitLog } from "@/app/actions";
+import { getVisitHistory, addManualVisit, getSchools, deleteVisitLog, editVisitLog, getQuarters } from "@/app/actions";
 import { format } from "date-fns";
-import { History, Plus, CheckCircle, Database, Edit2, Trash2 } from "lucide-react";
+import { History, Plus, CheckCircle, Database, Edit2, Trash2, Download } from "lucide-react";
 
-export default function VisitHistory() {
+export default function VisitHistory({ regionFilter }: { regionFilter?: string | null }) {
     const [history, setHistory] = useState<any[]>([]);
     const [schools, setSchools] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [filterMonth, setFilterMonth] = useState<string>(new Date().getMonth().toString());
+
+    const [quarters, setQuarters] = useState<{ id: string; schoolYear: string; label: string }[]>([]);
+    const [selectedQuarterKey, setSelectedQuarterKey] = useState<string>("");
+    const [reportFormat, setReportFormat] = useState<"csv" | "pdf">("csv");
 
     // Modal state
     const [showModal, setShowModal] = useState(false);
@@ -21,8 +25,8 @@ export default function VisitHistory() {
     const fetchHistory = async () => {
         setLoading(true);
         const [logs, schoolsData] = await Promise.all([
-            getVisitHistory(),
-            getSchools()
+            getVisitHistory(regionFilter),
+            getSchools(regionFilter)
         ]);
         setHistory(logs);
         setSchools(schoolsData);
@@ -31,7 +35,23 @@ export default function VisitHistory() {
 
     useEffect(() => {
         fetchHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [regionFilter]);
+
+    useEffect(() => {
+        getQuarters().then((q) => {
+            setQuarters(q);
+            if (q.length > 0) setSelectedQuarterKey(`${q[0].schoolYear}|${q[0].label}`);
+        });
     }, []);
+
+    const reportUrl = (() => {
+        if (!selectedQuarterKey) return null;
+        const [schoolYear, label] = selectedQuarterKey.split("|");
+        const params = new URLSearchParams({ schoolYear, quarter: label, format: reportFormat });
+        if (regionFilter) params.set("regionId", regionFilter);
+        return `/api/reports/mileage?${params.toString()}`;
+    })();
 
     const handleOpenAdd = () => {
         setEditingId(null);
@@ -78,7 +98,7 @@ export default function VisitHistory() {
         if (filterMonth === "all") return true;
         const logMonth = new Date(log.date).getMonth().toString();
         return logMonth === filterMonth;
-    }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    });
 
     const months = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -96,7 +116,7 @@ export default function VisitHistory() {
                     <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Review your completed visits and register new ones manually.</p>
                 </div>
 
-                <div className="flex items-center space-x-3 w-full sm:w-auto">
+                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
                     <select
                         value={filterMonth}
                         onChange={(e) => setFilterMonth(e.target.value)}
@@ -107,6 +127,39 @@ export default function VisitHistory() {
                             <option key={i} value={i.toString()}>{m}</option>
                         ))}
                     </select>
+
+                    {quarters.length > 0 && (
+                        <>
+                            <select
+                                value={selectedQuarterKey}
+                                onChange={(e) => setSelectedQuarterKey(e.target.value)}
+                                className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-indigo-500"
+                                title="Mileage report quarter"
+                            >
+                                {quarters.map((q) => (
+                                    <option key={q.id} value={`${q.schoolYear}|${q.label}`}>
+                                        {q.schoolYear} {q.label}
+                                    </option>
+                                ))}
+                            </select>
+                            <select
+                                value={reportFormat}
+                                onChange={(e) => setReportFormat(e.target.value as "csv" | "pdf")}
+                                className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-indigo-500"
+                            >
+                                <option value="csv">CSV</option>
+                                <option value="pdf">PDF</option>
+                            </select>
+                            <a
+                                href={reportUrl ?? "#"}
+                                className="flex items-center justify-center space-x-2 bg-gray-100 hover:bg-gray-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-gray-700 dark:text-gray-200 px-4 py-2 rounded-lg font-medium transition-colors"
+                                title="Download mileage report"
+                            >
+                                <Download size={16} />
+                                <span>Report</span>
+                            </a>
+                        </>
+                    )}
 
                     <button
                         onClick={handleOpenAdd}
