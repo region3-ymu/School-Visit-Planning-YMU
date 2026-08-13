@@ -41,6 +41,12 @@ const DEFAULT_MAX_VISITS_PER_DAY = 4;
 const DEFAULT_MAX_VISITS_PER_WEEK = 12;
 
 const CLASS_SCORE_BONUS = 20;
+
+// Straight-line metres covered per minute of driving, used only to reject
+// impossible sequences while building a day. Deliberately pessimistic — Miami
+// surface streets plus parking and walking in — and never used for the times
+// shown to the user, which come from the routing service.
+const ASSUMED_METRES_PER_MIN = 500;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
@@ -167,6 +173,8 @@ export async function proposeVisitsForWeek(
     visitRuleFrequency: string;
     visitRuleNote?: string;
     scheduleConflict?: boolean;
+    /** Every in-window class this school teaches that day, earliest first. */
+    slots: { start: Date; end: Date; subjectName?: string }[];
   };
 
   // Build candidate list: one entry per (eligible school × weekday)
@@ -200,15 +208,19 @@ export async function proposeVisitsForWeek(
       const key = `${school.id}:${dayStr}`;
       const sessions = sessionsBySchoolDay.get(key) ?? [];
 
-      // Pick the best in-window session for this day (if any)
-      const bestSession = sessions
+      // Every in-window class this school teaches that day, not just the first.
+      // A school often teaches twice — Carrie P. Meek runs 10:05 and 12:10 —
+      // and which one to attend depends on the rest of the day's route, so the
+      // choice is deferred to the clustering below.
+      const daySessions = sessions
         .filter((s) => {
           const startMins = s.startDateTime.getHours() * 60 + s.startDateTime.getMinutes();
           const endMins = s.endDateTime.getHours() * 60 + s.endDateTime.getMinutes();
           return isInWorkWindow(startMins, endMins, workWindow);
         })
-        .sort((a, b) => a.startDateTime.getTime() - b.startDateTime.getTime())[0];
+        .sort((a, b) => a.startDateTime.getTime() - b.startDateTime.getTime());
 
+      const bestSession = daySessions[0];
       const hasClass = bestSession !== undefined;
       const score = baseScore + (hasClass ? CLASS_SCORE_BONUS : 0);
 
@@ -234,6 +246,11 @@ export async function proposeVisitsForWeek(
         noClassWarning: !hasClass,
         visitRuleFrequency,
         visitRuleNote,
+        slots: daySessions.map((s) => ({
+          start: s.startDateTime,
+          end: s.endDateTime,
+          subjectName: s.subject?.name,
+        })),
       };
 
       schoolCandidates.push(candidate);
@@ -259,6 +276,11 @@ export async function proposeVisitsForWeek(
   // physically closest to the ones already picked — so a day is a tight
   // cluster of stops rather than a drive across the county.
   //
+  // A school is only added if its class times still leave a route you could
+  // actually drive: three classes that all start at 10:05 are close together
+  // and useless. Where a school teaches more than once that day, the slot that
+  // fits the day being built is the one chosen.
+  //
   // Distance here is straight-line, not road time: choosing the cluster needs
   // every pair of candidates compared, which would be hundreds of routing
   // calls per day. Road time still decides the order of the stops once the
@@ -267,17 +289,38 @@ export async function proposeVisitsForWeek(
   const chosenByDay = new Map<string, Candidate[]>();
   let weeklyCount = 0;
 
-  const distanceToCluster = (candidate: Candidate, cluster: Candidate[]): number => {
-    if (candidate.lat == null || candidate.lng == null) return Infinity;
+  type Slot = { start: Date; end: Date; subjectName?: string };
+  type Stop = { candidate: Candidate; slot: Slot };
+
+  const minutesOf = (d: Date) => d.getHours() * 60 + d.getMinutes();
+
+  const metresBetween = (a: Candidate, b: Candidate): number | null =>
+    a.lat != null && a.lng != null && b.lat != null && b.lng != null
+      ? haversineMeters(a.lat, a.lng, b.lat, b.lng)
+      : null;
+
+  const distanceToCluster = (candidate: Candidate, cluster: Stop[]): number => {
     let nearest = Infinity;
     for (const member of cluster) {
-      if (member.lat == null || member.lng == null) continue;
-      nearest = Math.min(
-        nearest,
-        haversineMeters(candidate.lat, candidate.lng, member.lat, member.lng)
-      );
+      const metres = metresBetween(candidate, member.candidate);
+      if (metres != null) nearest = Math.min(nearest, metres);
     }
     return nearest;
+  };
+
+  /** Can these stops be driven in start-time order without missing a class? */
+  const isDrivable = (stops: Stop[]): boolean => {
+    const ordered = [...stops].sort((a, b) => minutesOf(a.slot.start) - minutesOf(b.slot.start));
+    for (let i = 1; i < ordered.length; i += 1) {
+      const from = ordered[i - 1];
+      const to = ordered[i];
+      const metres = metresBetween(from.candidate, to.candidate);
+      const travelMins = metres == null ? 0 : metres / ASSUMED_METRES_PER_MIN;
+      if (minutesOf(from.slot.end) + travelMins > minutesOf(to.slot.start) + LATE_TOLERANCE_MIN) {
+        return false;
+      }
+    }
+    return true;
   };
 
   for (const day of weekDates) {
@@ -290,28 +333,60 @@ export async function proposeVisitsForWeek(
     if (pool.length === 0) continue;
 
     const room = Math.min(maxVisitsPerDay, maxVisitsPerWeek - weeklyCount);
-    const cluster: Candidate[] = [pool.shift()!];
+    // Seed with the most overdue school teaching that day, at its first class.
+    const seed = pool.shift()!;
+    const cluster: Stop[] = [{ candidate: seed, slot: seed.slots[0] }];
 
     while (cluster.length < room && pool.length > 0) {
-      // Falls back to index 0 — the most overdue — when no candidate has
-      // usable coordinates, since every distance is then Infinity.
-      let bestIndex = 0;
+      let bestIndex = -1;
+      let bestSlot: Slot | null = null;
       let bestDistance = Infinity;
+
       for (let i = 0; i < pool.length; i += 1) {
-        const distance = distanceToCluster(pool[i], cluster);
-        if (distance < bestDistance) {
+        const candidate = pool[i];
+        // Earliest slot that still leaves the day drivable.
+        const slot = candidate.slots.find((s) => isDrivable([...cluster, { candidate, slot: s }]));
+        if (!slot) continue;
+
+        const distance = distanceToCluster(candidate, cluster);
+        // Fill the day chronologically, nearest first among equals. Taking the
+        // nearest school outright instead loses more than it gains: grabbing a
+        // 13:40 class because it is a mile away rules out every other 13:40
+        // class, when a 12:10 stop first would have left the afternoon free.
+        const isBetter =
+          bestIndex === -1 ||
+          slot.start.getTime() < bestSlot!.start.getTime() ||
+          (slot.start.getTime() === bestSlot!.start.getTime() && distance < bestDistance);
+
+        if (isBetter) {
           bestDistance = distance;
           bestIndex = i;
+          bestSlot = slot;
         }
       }
-      cluster.push(pool.splice(bestIndex, 1)[0]);
+
+      // Nothing left that both fits the schedule and is reachable.
+      if (bestIndex === -1 || !bestSlot) break;
+
+      cluster.push({ candidate: pool[bestIndex], slot: bestSlot });
+      pool.splice(bestIndex, 1);
     }
 
-    for (const c of cluster) {
-      scheduledSchoolIds.add(c.schoolId);
+    for (const stop of cluster) {
+      scheduledSchoolIds.add(stop.candidate.schoolId);
       weeklyCount += 1;
     }
-    chosenByDay.set(dayStr, cluster);
+    // Bake the chosen slot in, so downstream sees one concrete class time.
+    chosenByDay.set(
+      dayStr,
+      cluster.map(({ candidate, slot }) => ({
+        ...candidate,
+        date: slot.start,
+        startTime: format(slot.start, "HH:mm"),
+        endTime: format(slot.end, "HH:mm"),
+        subjectName: slot.subjectName,
+      }))
+    );
   }
 
   // Then order each day's picks: chronological, refined by travel time.
