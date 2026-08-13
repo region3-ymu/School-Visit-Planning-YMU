@@ -47,6 +47,25 @@ const CLASS_SCORE_BONUS = 20;
 // surface streets plus parking and walking in — and never used for the times
 // shown to the user, which come from the routing service.
 const ASSUMED_METRES_PER_MIN = 500;
+
+// A visit is a drop-in, not attendance at the whole class: the manager watches
+// roughly the first or the last twenty minutes. That is what makes two classes
+// running at the same hour both visitable, so every schedule check below works
+// on these windows rather than on full class times.
+const OBSERVATION_MINUTES = 20;
+
+/** The opening and closing windows of a class — the two ways to drop in. */
+function observationWindows(start: Date, end: Date): { start: Date; end: Date }[] {
+  const lengthMins = (end.getTime() - start.getTime()) / 60_000;
+  if (lengthMins <= OBSERVATION_MINUTES) return [{ start, end }];
+
+  const openingEnd = new Date(start.getTime() + OBSERVATION_MINUTES * 60_000);
+  const closingStart = new Date(end.getTime() - OBSERVATION_MINUTES * 60_000);
+  return [
+    { start, end: openingEnd },
+    { start: closingStart, end },
+  ];
+}
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
@@ -173,7 +192,10 @@ export async function proposeVisitsForWeek(
     visitRuleFrequency: string;
     visitRuleNote?: string;
     scheduleConflict?: boolean;
-    /** Every in-window class this school teaches that day, earliest first. */
+    /**
+     * Every way to drop in on this school that day, earliest first — the
+     * opening and closing window of each class it teaches.
+     */
     slots: { start: Date; end: Date; subjectName?: string }[];
   };
 
@@ -246,11 +268,15 @@ export async function proposeVisitsForWeek(
         noClassWarning: !hasClass,
         visitRuleFrequency,
         visitRuleNote,
-        slots: daySessions.map((s) => ({
-          start: s.startDateTime,
-          end: s.endDateTime,
-          subjectName: s.subject?.name,
-        })),
+        slots: daySessions
+          .flatMap((s) =>
+            observationWindows(s.startDateTime, s.endDateTime).map((w) => ({
+              start: w.start,
+              end: w.end,
+              subjectName: s.subject?.name,
+            }))
+          )
+          .sort((a, b) => a.start.getTime() - b.start.getTime()),
       };
 
       schoolCandidates.push(candidate);
