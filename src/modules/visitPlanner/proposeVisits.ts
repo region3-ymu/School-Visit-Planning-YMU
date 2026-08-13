@@ -151,6 +151,8 @@ export async function proposeVisitsForWeek(
   type Candidate = {
     schoolId: string;
     schoolName: string;
+    /** yyyy-MM-dd of the weekday this candidate is for. */
+    dayStr: string;
     zipCode: string;
     lat: number | null;
     lng: number | null;
@@ -176,6 +178,10 @@ export async function proposeVisitsForWeek(
     const lastVisitWeek = lastVisit ? getWeekNumber(lastVisit) : 0;
 
     if (!shouldProposeThisWeek(freq, lastVisitWeek, currentWeek)) continue;
+
+    // Collected across the whole week so that, once we know whether this
+    // school teaches at all this week, the days it doesn't can be dropped.
+    const schoolCandidates: Candidate[] = [];
 
     const daysSinceLast = lastVisit
       ? Math.floor((today.getTime() - lastVisit.getTime()) / MS_PER_DAY)
@@ -214,6 +220,7 @@ export async function proposeVisitsForWeek(
       const candidate: Candidate = {
         schoolId: school.id,
         schoolName: school.name,
+        dayStr,
         zipCode: school.zipCode,
         lat: school.lat ?? null,
         lng: school.lng ?? null,
@@ -228,33 +235,53 @@ export async function proposeVisitsForWeek(
         visitRuleNote,
       };
 
-      if (!candidatesByDay.has(dayStr)) candidatesByDay.set(dayStr, []);
-      // Keep only the highest-scoring candidate per school per day
-      const list = candidatesByDay.get(dayStr)!;
-      const existing = list.find((c) => c.schoolId === school.id);
-      if (!existing || score > existing.score) {
-        if (existing) list.splice(list.indexOf(existing), 1);
-        list.push(candidate);
-      }
+      schoolCandidates.push(candidate);
+    }
+
+    // If the school teaches at all this week, only offer the days it actually
+    // teaches. Otherwise the packer below can spend the school on an empty
+    // Monday and it can never be picked for the Thursday it has a class on —
+    // which is how a school with 106 sessions ended up proposed as a
+    // "no class scheduled" admin visit.
+    const teachingDays = schoolCandidates.filter((c) => !c.noClassWarning);
+    const usable = teachingDays.length > 0 ? teachingDays : schoolCandidates;
+
+    for (const candidate of usable) {
+      if (!candidatesByDay.has(candidate.dayStr)) candidatesByDay.set(candidate.dayStr, []);
+      candidatesByDay.get(candidate.dayStr)!.push(candidate);
     }
   }
 
-  // Greedy packing: Mon → Fri, pick top candidates per day
-  const proposed: ProposedVisit[] = [];
+  // Selection is global, not day by day. Walking Mon → Fri and filling each
+  // day before looking at the next means the first days win every tie, and a
+  // school gets consumed on Monday before Thursday — where it teaches — is
+  // ever considered. Ranking every (school, day) pair together lets the class
+  // bonus actually decide which day a school is visited on.
   const scheduledSchoolIds = new Set<string>();
+  const chosenByDay = new Map<string, Candidate[]>();
   let weeklyCount = 0;
 
-  for (const day of weekDates) {
+  const ranked = [...candidatesByDay.values()].flat().sort((a, b) => b.score - a.score);
+  for (const candidate of ranked) {
     if (weeklyCount >= maxVisitsPerWeek) break;
+    if (scheduledSchoolIds.has(candidate.schoolId)) continue;
 
+    const dayList = chosenByDay.get(candidate.dayStr) ?? [];
+    if (dayList.length >= maxVisitsPerDay) continue;
+
+    dayList.push(candidate);
+    chosenByDay.set(candidate.dayStr, dayList);
+    scheduledSchoolIds.add(candidate.schoolId);
+    weeklyCount += 1;
+  }
+
+  // Then order each day's picks: chronological, refined by travel time.
+  const proposed: ProposedVisit[] = [];
+
+  for (const day of weekDates) {
     const dayStr = format(day, "yyyy-MM-dd");
-    const list = candidatesByDay.get(dayStr) ?? [];
-    const available = list
-      .filter((c) => !scheduledSchoolIds.has(c.schoolId))
-      .sort((a, b) => b.score - a.score);
-
-    const take = Math.min(maxVisitsPerDay, maxVisitsPerWeek - weeklyCount, available.length);
-    let selected = available.slice(0, take);
+    let selected = chosenByDay.get(dayStr) ?? [];
+    if (selected.length === 0) continue;
 
     // Base order: chronological by class time — a saner default than score
     // order for a day's visit sequence, and the fallback when no distance

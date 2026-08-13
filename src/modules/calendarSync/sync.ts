@@ -302,7 +302,7 @@ export async function syncAllSchoolCalendars(
   prisma: PrismaClient,
   dateRangeStart: Date,
   dateRangeEnd: Date,
-  options?: { createSchoolIfMissing?: boolean }
+  options?: { createSchoolIfMissing?: boolean; forceFullSync?: boolean }
 ): Promise<SyncResult> {
   const result: SyncResult = {
     calendarCount: 0,
@@ -407,6 +407,7 @@ export async function syncAllSchoolCalendars(
         });
         const subResult = await syncSchoolCalendar(prisma, created.id, dateRangeStart, dateRangeEnd, {
           calendarIdOverride: cal.id,
+          forceFullSync: options?.forceFullSync,
         });
         result.schoolMatched += 1;
         result.eventsProcessed += subResult.eventsProcessed;
@@ -429,6 +430,7 @@ export async function syncAllSchoolCalendars(
     result.schoolMatched += 1;
     const subResult = await syncSchoolCalendar(prisma, school.id, dateRangeStart, dateRangeEnd, {
       calendarIdOverride: cal.id,
+      forceFullSync: options?.forceFullSync,
     });
     result.eventsProcessed += subResult.eventsProcessed;
     result.sessionsCreated += subResult.sessionsCreated;
@@ -445,6 +447,12 @@ export async function syncAllSchoolCalendars(
 export function getDefaultSyncRange(): { start: Date; end: Date } {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
+  // Back up to Monday. The planner renders a whole Mon–Fri week, so starting
+  // at "today" leaves the days already past in the current week with no
+  // sessions at all — every school on them looks like it has no class.
+  const daysSinceMonday = (start.getDay() + 6) % 7;
+  start.setDate(start.getDate() - daysSinceMonday);
+
   const end = new Date(start);
   end.setDate(end.getDate() + defaultWeeksAhead * 7);
   return { start, end };

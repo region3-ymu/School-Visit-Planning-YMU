@@ -24,9 +24,14 @@ async function main() {
     console.error("Missing GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 in .env or .env.local");
     process.exit(1);
   }
-  console.log("Listing calendars from Google...");
+  // --full ignores the stored sync tokens and re-pulls the whole date range.
+  // Needed after the range itself changes, since an incremental sync asks
+  // Google only for what changed and never revisits dates it skipped before.
+  const forceFullSync = process.argv.slice(2).includes("--full");
+  console.log(`Listing calendars from Google...${forceFullSync ? " (full resync)" : ""}`);
   const result = await syncAllSchoolCalendars(prisma, start, end, {
     createSchoolIfMissing: false,
+    forceFullSync,
   });
   console.log("Result:", JSON.stringify(result, null, 2));
   await prisma.$disconnect();
