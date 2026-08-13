@@ -58,3 +58,4 @@ data/
 # Run artifacts
 ymua-import-review.csv
 rollback-calendar-ids.json
+backup-cleanup-*.json

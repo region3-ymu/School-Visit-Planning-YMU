@@ -233,6 +233,17 @@ export async function syncSchoolCalendar(
   return result;
 }
 
+// Every YMU school calendar is a shared secondary calendar, whose id always
+// ends in "@group.calendar.google.com". A person's own calendar is their email
+// address, and Google's holiday/birthday calendars sit under the different
+// "@group.v.calendar.google.com" domain — so this one suffix cleanly separates
+// "could be a school" from "definitely isn't".
+const SCHOOL_CALENDAR_SUFFIX = "@group.calendar.google.com";
+
+function isSchoolCalendarId(calendarId: string): boolean {
+  return calendarId.endsWith(SCHOOL_CALENDAR_SUFFIX);
+}
+
 type MatchOutcome =
   | { matched: true }
   | { matched: false; reason: string; candidates?: { name: string; score: number }[] };
@@ -340,6 +351,11 @@ export async function syncAllSchoolCalendars(
   for (const cal of calendars) {
     const summary = cal.summary?.trim();
     if (!summary) continue;
+    // Google hands the service account more than school calendars: the owner's
+    // own calendar (schedule@ymu.org) and auto-subscribed holiday calendars
+    // (en.usa#holiday@group.v.calendar.google.com). Flagging those as
+    // "unmatched school" every run buries the real problems in the queue.
+    if (!isSchoolCalendarId(cal.id)) continue;
 
     let school = byCalendarId.get(cal.id) ?? null;
 

@@ -18,7 +18,8 @@
     "sync-calendars:test": "npx tsx scripts/sync-calendars-test.ts",
     "dedupe-schools": "npx tsx scripts/dedupe-schools.ts",
     "verify-geocoding": "npx tsx scripts/verify-geocoding.ts",
-    "check:matching": "npx tsx scripts/check-calendar-matching.ts"
+    "check:matching": "npx tsx scripts/check-calendar-matching.ts",
+    "cleanup:non-ymua": "npx tsx scripts/cleanup-non-ymua.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.118",
