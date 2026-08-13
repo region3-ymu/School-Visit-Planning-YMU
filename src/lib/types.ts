@@ -26,6 +26,8 @@ export interface VisitInfo {
   reason: string;
   startTime?: string;
   endTime?: string;
+  classStartTime?: string;
+  classEndTime?: string;
   /** Program/subject name for the class at this time (e.g. "Drumline", "Modern Band") */
   subjectName?: string;
   isPinned: boolean;

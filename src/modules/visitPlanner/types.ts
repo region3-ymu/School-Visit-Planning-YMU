@@ -12,8 +12,12 @@ export interface ProposedVisit {
   lat?: number;
   lng?: number;
   date: Date;
+  /** The 20-minute drop-in window to actually be there. */
   startTime: string;
   endTime: string;
+  /** The full class this drop-in sits inside, for context on the card. */
+  classStartTime?: string;
+  classEndTime?: string;
   score: number;
   reason: string;
   subjectName?: string;

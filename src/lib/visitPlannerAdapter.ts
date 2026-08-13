@@ -13,6 +13,8 @@ export function proposedVisitToVisitInfo(p: ProposedVisit): VisitInfo {
     reason: p.reason,
     startTime: p.startTime,
     endTime: p.endTime,
+    classStartTime: p.classStartTime,
+    classEndTime: p.classEndTime,
     subjectName: p.subjectName,
     isPinned: false,
     isCompleted: false,

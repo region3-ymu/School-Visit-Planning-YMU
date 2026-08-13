@@ -6,25 +6,31 @@
  *   Output: ProposedVisit[] — at most one entry per school, covering Mon–Fri
  *
  *   ELIGIBILITY (hard rule):
- *     A school is eligible if it belongs to the RM's region AND has not been
- *     visited within its frequency window (default: BIWEEKLY = 14 days).
- *     ClassSession existence is NOT required for eligibility.
+ *     A school is eligible if it belongs to the RM's region, has not been
+ *     visited within its frequency window (default: BIWEEKLY = 14 days), AND
+ *     teaches a class that day. A day a school does not teach is not a visit,
+ *     and a school with nothing on its calendar this week is not proposed at
+ *     all — there is no "admin / catch-up" fallback.
  *
- *   SCORING (soft, affects day selection):
- *     base = days overdue * 5 + 100  (or days-since-last if not yet due)
- *     class bonus = +20 when a ClassSession exists on that day
- *     Schools with no class on the selected day carry noClassWarning=true
- *     and are labelled "No class — admin/catch-up visit".
+ *   WHAT A VISIT IS:
+ *     A drop-in on roughly the first or the last OBSERVATION_MINUTES of a
+ *     class, not attendance at all of it. So each class offers two ways in,
+ *     and two classes running at the same hour can both be visited.
  *
- *   PACKING:
- *     Greedy day-by-day: for each Mon→Fri, pick highest-scoring unscheduled
- *     schools up to maxVisitsPerDay, stopping when maxVisitsPerWeek is hit.
- *     Selected visits are ordered chronologically by class time by default.
- *     If distanceService is provided and all candidates have coords, the
- *     daily order is instead chosen to respect each fixed ClassSession time
- *     window while minimizing travel (see orderByFeasibleSchedule) — not
- *     just nearest-neighbor distance. Visits that can't be reached on time
- *     in any ordering are flagged with scheduleConflict=true.
+ *   BUILDING A DAY (the rule, in the RM's words: close together, and teaching
+ *   that day):
+ *     Days are taken richest-first, not Monday-first — no day has to be
+ *     filled. Each is seeded with the most overdue school teaching then, and
+ *     grown by adding the school whose next drop-in comes soonest, nearest
+ *     first among equal times, and only if the whole day stays drivable:
+ *     every stop reachable from the previous one before its window opens,
+ *     measured straight-line at a pessimistic urban speed.
+ *
+ *   ORDERING:
+ *     Once a day's stops are fixed they are ordered chronologically, then
+ *     refined against real road times when a distanceService is available
+ *     (see orderByFeasibleSchedule). Stops that cannot be reached on time in
+ *     any ordering are flagged with scheduleConflict=true.
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -185,6 +191,8 @@ export async function proposeVisitsForWeek(
     date: Date;
     startTime: string;
     endTime: string;
+    classStartTime?: string;
+    classEndTime?: string;
     score: number;
     reason: string;
     subjectName?: string;
@@ -196,7 +204,13 @@ export async function proposeVisitsForWeek(
      * Every way to drop in on this school that day, earliest first — the
      * opening and closing window of each class it teaches.
      */
-    slots: { start: Date; end: Date; subjectName?: string }[];
+    slots: {
+      start: Date;
+      end: Date;
+      classStart: Date;
+      classEnd: Date;
+      subjectName?: string;
+    }[];
   };
 
   // Build candidate list: one entry per (eligible school × weekday)
@@ -273,6 +287,8 @@ export async function proposeVisitsForWeek(
             observationWindows(s.startDateTime, s.endDateTime).map((w) => ({
               start: w.start,
               end: w.end,
+              classStart: s.startDateTime,
+              classEnd: s.endDateTime,
               subjectName: s.subject?.name,
             }))
           )
@@ -315,7 +331,13 @@ export async function proposeVisitsForWeek(
   const chosenByDay = new Map<string, Candidate[]>();
   let weeklyCount = 0;
 
-  type Slot = { start: Date; end: Date; subjectName?: string };
+  type Slot = {
+    start: Date;
+    end: Date;
+    classStart: Date;
+    classEnd: Date;
+    subjectName?: string;
+  };
   type Stop = { candidate: Candidate; slot: Slot };
 
   const minutesOf = (d: Date) => d.getHours() * 60 + d.getMinutes();
@@ -349,7 +371,17 @@ export async function proposeVisitsForWeek(
     return true;
   };
 
-  for (const day of weekDates) {
+  // Days are filled richest-first, not Monday-first. There is no obligation to
+  // put something on every day: a Wednesday where one school teaches is better
+  // left empty than spent on a lone stop, when that school can instead join a
+  // Thursday that already has three others nearby.
+  const daysByOpportunity = [...weekDates].sort((a, b) => {
+    const aCount = (candidatesByDay.get(format(a, "yyyy-MM-dd")) ?? []).length;
+    const bCount = (candidatesByDay.get(format(b, "yyyy-MM-dd")) ?? []).length;
+    return bCount !== aCount ? bCount - aCount : a.getTime() - b.getTime();
+  });
+
+  for (const day of daysByOpportunity) {
     if (weeklyCount >= maxVisitsPerWeek) break;
 
     const dayStr = format(day, "yyyy-MM-dd");
@@ -410,6 +442,8 @@ export async function proposeVisitsForWeek(
         date: slot.start,
         startTime: format(slot.start, "HH:mm"),
         endTime: format(slot.end, "HH:mm"),
+        classStartTime: format(slot.classStart, "HH:mm"),
+        classEndTime: format(slot.classEnd, "HH:mm"),
         subjectName: slot.subjectName,
       }))
     );
@@ -456,6 +490,8 @@ export async function proposeVisitsForWeek(
         date: c.date,
         startTime: c.startTime,
         endTime: c.endTime,
+        classStartTime: c.classStartTime,
+        classEndTime: c.classEndTime,
         score: c.score,
         reason: c.reason,
         subjectName: c.subjectName,

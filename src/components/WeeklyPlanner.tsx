@@ -516,7 +516,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                             if (hasOverlap) {
 
-                                                dynamicWarning = "¡Cuidado! Clases muy cercanas o solapadas. Asegúrese de tener tiempo suficiente.";
+                                                dynamicWarning = "Heads up! These visits are close together or overlap. Make sure you have enough time.";
 
                                             } else {
 
@@ -572,6 +572,19 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
                                                     <div className="flex items-center"><MapPin size={12} className="mr-1" /> {visit.zipCode}</div>
 
                                                 </div>
+
+                                                {/* The times above are the 20-minute drop-in. Showing the class it sits
+                                                    inside makes clear whether you are catching the start or the end. */}
+                                                {visit.classStartTime && visit.classEndTime && (
+                                                    <div className="text-[11px] text-gray-400 dark:text-gray-500 -mt-1 mb-2">
+                                                        Class runs {visit.classStartTime} - {visit.classEndTime}
+                                                        {visit.startTime === visit.classStartTime
+                                                            ? " · first 20 min"
+                                                            : visit.endTime === visit.classEndTime
+                                                                ? " · last 20 min"
+                                                                : ""}
+                                                    </div>
+                                                )}
 
 
 
