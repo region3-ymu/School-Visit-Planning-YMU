@@ -1,6 +1,6 @@
 /**
  * Test script for calendar sync. Do NOT use in production.
- * Requires .env or .env.local: DATABASE_URL, GOOGLE_CALENDAR_* (client id, secret, refresh token)
+ * Requires .env or .env.local: DATABASE_URL, GOOGLE_SERVICE_ACCOUNT_KEY_BASE64
  *
  * Run: npm run sync-calendars:test
  */
@@ -20,8 +20,8 @@ async function main() {
   const { start, end } = getDefaultSyncRange();
   console.log("Sync range:", start.toISOString(), "->", end.toISOString());
 
-  if (!process.env.GOOGLE_CALENDAR_REFRESH_TOKEN) {
-    console.error("Missing GOOGLE_CALENDAR_REFRESH_TOKEN in .env or .env.local");
+  if (!process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64) {
+    console.error("Missing GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 in .env or .env.local");
     process.exit(1);
   }
   console.log("Listing calendars from Google...");

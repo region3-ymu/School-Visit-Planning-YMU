@@ -6,12 +6,14 @@ const prisma = new PrismaClient();
 async function main() {
   console.log("Seeding regions...");
 
-  // 4 regions — West intentionally omitted (not yet active)
+  // The five regions the YMU-A roster is filed under. West carries 23 schools
+  // there, so omitting it here made them unimportable.
   const regions = [
     { name: "North", code: "NORTH" },
     { name: "South", code: "SOUTH" },
     { name: "Central", code: "CENTRAL" },
     { name: "East", code: "EAST" },
+    { name: "West", code: "WEST" },
   ];
 
   for (const r of regions) {

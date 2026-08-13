@@ -1,28 +1,58 @@
-import { google } from "googleapis";
+import {
+  GoogleCalendarClient,
+  listAllCalendars,
+  parseServiceAccount,
+  type GoogleEventsPage,
+} from "@/lib/google/calendar";
 
 /**
- * Creates an authenticated Google Calendar API client using OAuth2 refresh token.
- * Requires in .env: GOOGLE_CALENDAR_CLIENT_ID, GOOGLE_CALENDAR_CLIENT_SECRET, GOOGLE_CALENDAR_REFRESH_TOKEN
+ * Google Calendar access for the sync module.
+ *
+ * Backed by a service account (GOOGLE_SERVICE_ACCOUNT_KEY_BASE64) rather than
+ * one person's OAuth refresh token: the calendars are ACL-shared with the
+ * service account and subscribed to its calendarList, so it sees all of them
+ * and there is no token to expire when someone changes their password.
+ *
+ * The `events.list(...) -> { data }` shape below deliberately mirrors the
+ * googleapis client this replaced, so sync.ts did not have to change.
  */
-export function getGoogleCalendarClient() {
-  const clientId = process.env.GOOGLE_CALENDAR_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
-  const refreshToken = process.env.GOOGLE_CALENDAR_REFRESH_TOKEN;
 
-  if (!clientId || !clientSecret || !refreshToken) {
+function getServiceAccount() {
+  const encoded = process.env.GOOGLE_SERVICE_ACCOUNT_KEY_BASE64;
+  if (!encoded) {
     throw new Error(
-      "Missing Google Calendar env: GOOGLE_CALENDAR_CLIENT_ID, GOOGLE_CALENDAR_CLIENT_SECRET, GOOGLE_CALENDAR_REFRESH_TOKEN"
+      "Missing GOOGLE_SERVICE_ACCOUNT_KEY_BASE64 — base64 of the service-account JSON shared with the YMU calendars."
     );
   }
+  return parseServiceAccount(encoded);
+}
 
-  const oauth2Client = new google.auth.OAuth2(
-    clientId,
-    clientSecret,
-    "https://developers.google.com/oauthplayground" // redirect not used when only refresh_token
-  );
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
+export type EventsListParams = {
+  calendarId: string;
+  syncToken?: string;
+  pageToken?: string;
+  timeMin?: string;
+  timeMax?: string;
+  /** Accepted for call-site compatibility; the client always sets it. */
+  singleEvents?: boolean;
+};
 
-  return google.calendar({ version: "v3", auth: oauth2Client });
+export function getGoogleCalendarClient() {
+  const client = new GoogleCalendarClient(getServiceAccount());
+  return {
+    events: {
+      async list(params: EventsListParams): Promise<{ data: GoogleEventsPage }> {
+        const data = await client.listEvents({
+          calendarId: params.calendarId,
+          syncToken: params.syncToken,
+          pageToken: params.pageToken,
+          timeMin: params.timeMin,
+          timeMax: params.timeMax,
+        });
+        return { data };
+      },
+    },
+  };
 }
 
 export type CalendarListEntry = {
@@ -31,14 +61,13 @@ export type CalendarListEntry = {
 };
 
 /**
- * List all calendars the authenticated account can see.
+ * List every calendar the service account is subscribed to, across all pages.
  */
 export async function listCalendars(): Promise<CalendarListEntry[]> {
-  const calendar = getGoogleCalendarClient();
-  const res = await calendar.calendarList.list();
-  const items = res.data.items ?? [];
-  return items.map((item) => ({
-    id: item.id!,
-    summary: item.summary ?? null,
+  const client = new GoogleCalendarClient(getServiceAccount());
+  const entries = await listAllCalendars(client);
+  return entries.map((entry) => ({
+    id: entry.id,
+    summary: entry.summary ?? null,
   }));
 }

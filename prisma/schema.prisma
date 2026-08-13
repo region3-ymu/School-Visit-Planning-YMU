@@ -92,15 +92,25 @@ model Region {
 
 model School {
   id                   String    @id @default(cuid())
+  // schools.id in the YMU-A Supabase roster, for rows that came from there.
+  // The re-sync key: without it a second import has to reconcile by name, and
+  // fuzzy name matching on this roster silently merges different schools
+  // ("Homestead Senior High" vs "Homestead Middle School").
+  externalId           String?   @unique
   name                 String
   zipCode              String    @default("")
   address              String?
   lat                  Float?
   lng                  Float?
+  // Where lat/lng came from: 'ymu-a' | 'ors' | 'google' | 'manual'. Rows
+  // sourced from YMU-A arrive already geocoded and must not be re-geocoded.
+  geocodeSource        String?
   availability         String    @default("[]")
   active               Boolean   @default(true)
   regionId             String?
-  googleCalendarId     String?
+  // Unique: two schools pinned to the same calendar would duplicate every
+  // ClassSession that calendar produces.
+  googleCalendarId     String?   @unique
   // Google Calendar Events.list sync token for incremental sync — null means
   // the next sync does a full pull (first sync, or after a 410 Gone reset).
   calendarSyncToken    String?
@@ -299,7 +309,10 @@ model CalendarSyncIssue {
   id              String    @id @default(cuid())
   calendarId      String
   calendarSummary String?
-  reason          String // e.g. "NO_MATCHING_SCHOOL"
+  reason          String // "NO_MATCHING_SCHOOL" | "AMBIGUOUS_MATCH"
+  // JSON [{ name, score }] — the top scoring schools the matcher rejected.
+  // Without them an AMBIGUOUS_MATCH row tells a reviewer nothing actionable.
+  candidates      String?
   detectedAt      DateTime  @default(now())
   resolvedAt      DateTime?
 

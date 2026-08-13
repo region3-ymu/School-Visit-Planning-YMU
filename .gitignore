@@ -53,3 +53,4 @@ archive/
 
 # CSV data files (contain school lists — keep local only)
 data/
+!.env.example

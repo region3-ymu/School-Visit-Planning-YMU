@@ -1,5 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { getGoogleCalendarClient } from "./client";
+import { matchByName } from "@/lib/schoolNames";
+import type { GoogleCalendarEvent } from "@/lib/google/calendar";
 import type { SyncResult } from "./types";
 
 const defaultWeeksAhead = 12;
@@ -41,11 +43,11 @@ async function getOrCreateTeacher(
   return created.id;
 }
 
-function extractTeacherNameFromEvent(event: any): string | null {
-  const fromOrganizer =
-    event?.organizer?.displayName ||
-    event?.creator?.displayName ||
-    null;
+function extractTeacherNameFromEvent(event: GoogleCalendarEvent): string | null {
+  // `creator` is not on the declared type but Google does send it; the index
+  // signature on GoogleCalendarEvent is what makes reading it type-safe.
+  const creator = event.creator as { displayName?: string } | undefined;
+  const fromOrganizer = event.organizer?.displayName || creator?.displayName || null;
   if (typeof fromOrganizer === "string" && fromOrganizer.trim()) return fromOrganizer.trim();
 
   const desc = typeof event?.description === "string" ? event.description : "";
@@ -59,8 +61,11 @@ function extractTeacherNameFromEvent(event: any): string | null {
 
 /** Google returns HTTP 410 when a syncToken has expired/is invalid — caller must do a full resync. */
 function isGoneError(err: unknown): boolean {
-  const anyErr = err as { code?: number; response?: { status?: number } };
-  return anyErr?.code === 410 || anyErr?.response?.status === 410;
+  // `status` is what GoogleCalendarError carries; `code`/`response.status` are
+  // the shapes the previous googleapis client threw. Kept together so a stale
+  // token still triggers a full resync rather than surfacing as a hard error.
+  const anyErr = err as { status?: number; code?: number; response?: { status?: number } };
+  return anyErr?.status === 410 || anyErr?.code === 410 || anyErr?.response?.status === 410;
 }
 
 /**
@@ -228,21 +233,25 @@ export async function syncSchoolCalendar(
   return result;
 }
 
+type MatchOutcome =
+  | { matched: true }
+  | { matched: false; reason: string; candidates?: { name: string; score: number }[] };
+
 /**
- * Upsert a CalendarSyncIssue for a Google calendar with no matching School,
+ * Upsert a CalendarSyncIssue for a Google calendar the matcher could not pin,
  * or resolve one if a previously-unmatched calendar now has a match.
  */
 async function trackCalendarMatch(
   prisma: PrismaClient,
   calendarId: string,
   calendarSummary: string | null,
-  matched: boolean
+  outcome: MatchOutcome
 ): Promise<void> {
   const openIssue = await prisma.calendarSyncIssue.findFirst({
     where: { calendarId, resolvedAt: null },
   });
 
-  if (matched) {
+  if (outcome.matched) {
     if (openIssue) {
       await prisma.calendarSyncIssue.update({
         where: { id: openIssue.id },
@@ -252,18 +261,31 @@ async function trackCalendarMatch(
     return;
   }
 
-  if (!openIssue) {
-    await prisma.calendarSyncIssue.create({
-      data: { calendarId, calendarSummary, reason: "NO_MATCHING_SCHOOL" },
+  const candidates = outcome.candidates?.length ? JSON.stringify(outcome.candidates) : null;
+
+  if (openIssue) {
+    // Re-running sync should refresh why it still failed, not leave the first
+    // run's reason frozen in place.
+    await prisma.calendarSyncIssue.update({
+      where: { id: openIssue.id },
+      data: { reason: outcome.reason, candidates, calendarSummary },
     });
+    return;
   }
+
+  await prisma.calendarSyncIssue.create({
+    data: { calendarId, calendarSummary, reason: outcome.reason, candidates },
+  });
 }
 
 /**
- * Sync all school calendars: list calendars from Google, match by summary === School.name,
- * then sync events for each matched school in the date range.
- * Schools without a matching calendar are skipped. Optionally update School.googleCalendarId when matched.
- * Calendars with no matching active School are recorded in CalendarSyncIssue for review.
+ * Sync all school calendars: list calendars from Google, resolve each to a
+ * School (already-pinned googleCalendarId first, then normalized-name matching
+ * with a school-level guard), then sync events for that school in the date
+ * range and pin the calendar id if it wasn't already.
+ *
+ * Calendars that match nothing, or match ambiguously, are recorded in
+ * CalendarSyncIssue with their top candidates for a human to resolve.
  */
 export async function syncAllSchoolCalendars(
   prisma: PrismaClient,
@@ -305,13 +327,39 @@ export async function syncAllSchoolCalendars(
     console.log(`Schools in DB: ${schools.length}. Matching by calendar name...`);
   }
 
+  // Pin-then-skip: a calendar already linked to a school never goes back
+  // through the matcher. After the YMU-A import nearly every school arrives
+  // pre-pinned, so the fuzzy path below only ever sees genuinely new calendars.
+  const byCalendarId = new Map(
+    schools.filter((s) => s.googleCalendarId).map((s) => [s.googleCalendarId as string, s])
+  );
+  // Only unpinned schools are matchable — a school already bound to another
+  // calendar must not be stolen by a similarly-named one.
+  const unpinned = schools.filter((s) => !s.googleCalendarId);
+
   for (const cal of calendars) {
     const summary = cal.summary?.trim();
     if (!summary) continue;
 
-    const school = schools.find((s) => s.name.trim() === summary);
+    let school = byCalendarId.get(cal.id) ?? null;
+
     if (!school) {
-      await trackCalendarMatch(prisma, cal.id, cal.summary ?? null, false);
+      const match = matchByName(summary, unpinned, (s) => s.name);
+      if (match.status === "matched") {
+        school = match.item;
+        // Remove it from the pool so a second, similarly-named calendar in the
+        // same run cannot match the same school.
+        unpinned.splice(unpinned.indexOf(match.item), 1);
+      } else {
+        await trackCalendarMatch(prisma, cal.id, cal.summary ?? null, {
+          matched: false,
+          reason: match.status === "ambiguous" ? "AMBIGUOUS_MATCH" : "NO_MATCHING_SCHOOL",
+          candidates: match.candidates.map((c) => ({ name: c.item.name, score: c.score })),
+        });
+      }
+    }
+
+    if (!school) {
       if (options?.createSchoolIfMissing) {
         const created = await prisma.school.create({
           data: {
@@ -333,7 +381,7 @@ export async function syncAllSchoolCalendars(
       continue;
     }
 
-    await trackCalendarMatch(prisma, cal.id, cal.summary ?? null, true);
+    await trackCalendarMatch(prisma, cal.id, cal.summary ?? null, { matched: true });
 
     if (!school.googleCalendarId) {
       await prisma.school.update({

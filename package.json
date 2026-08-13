@@ -4,20 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-	"build": "prisma generate && next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "db:seed": "npx tsx prisma/seed.ts",
     "import-schools": "npx tsx scripts/import-schools.ts",
+    "import:ymua": "npx tsx scripts/import-from-ymua.ts",
     "geocode-schools": "npx tsx scripts/geocode-schools.ts",
     "validate-geocoding": "npx tsx scripts/validate-school-geocoding.ts",
     "apply-geocoding-corrections": "npx tsx scripts/apply-geocoding-corrections.ts",
     "build-distance-matrix": "npx tsx scripts/build-distance-matrix.ts",
     "create-user": "npx tsx scripts/create-user.ts",
     "sync-calendars:test": "npx tsx scripts/sync-calendars-test.ts",
-    "get-calendar-token": "npx tsx scripts/getCalendarToken.ts",
     "dedupe-schools": "npx tsx scripts/dedupe-schools.ts",
-    "verify-geocoding": "npx tsx scripts/verify-geocoding.ts"
+    "verify-geocoding": "npx tsx scripts/verify-geocoding.ts",
+    "check:matching": "npx tsx scripts/check-calendar-matching.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.118",
@@ -31,7 +32,6 @@
     "csv-parse": "^5.6.0",
     "date-fns": "^4.1.0",
     "dotenv": "^17.3.1",
-    "googleapis": "^144.0.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
