@@ -25,23 +25,33 @@ async function main() {
     console.log(`  ✓ Region ${r.name} (${r.code})`);
   }
 
-  console.log("Seeding admin user (Pedro)...");
+  console.log("Seeding admin user...");
 
-  const adminEmail = process.env.ADMIN_EMAIL ?? "pedro@ymu.org";
-  const adminPassword = process.env.ADMIN_PASSWORD ?? "changeme";
-  const hashedPassword = await bcrypt.hash(adminPassword, 12);
+  const adminEmail = process.env.ADMIN_EMAIL ?? "programs@ymu.org";
+  const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
 
-  await prisma.user.upsert({
-    where: { email: adminEmail },
-    update: {},
-    create: {
-      email: adminEmail,
-      name: "Pedro",
-      role: "ADMIN",
-      hashedPassword,
-    },
-  });
-  console.log(`  ✓ Admin user: ${adminEmail}`);
+  if (existingAdmin) {
+    console.log(`  ✓ Admin user already exists: ${adminEmail}`);
+  } else {
+    // No default password. This block only runs when the admin does not exist
+    // yet, so falling back to something like "changeme" would quietly create a
+    // known-password ADMIN on whatever database this is pointed at.
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    if (!adminPassword) {
+      throw new Error(
+        `No user ${adminEmail} exists and ADMIN_PASSWORD is not set. Set ADMIN_PASSWORD to create the admin, or ADMIN_EMAIL if the admin uses a different address.`
+      );
+    }
+    await prisma.user.create({
+      data: {
+        email: adminEmail,
+        name: "Programs",
+        role: "ADMIN",
+        hashedPassword: await bcrypt.hash(adminPassword, 12),
+      },
+    });
+    console.log(`  ✓ Admin user created: ${adminEmail}`);
+  }
 
   console.log("Seeding placeholder quarters (2026-27)...");
 
