@@ -26,6 +26,18 @@ export default {
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      // Users are created here with a password (scripts/create-user.ts), so the
+      // first Google sign-in finds an existing user with that email and no
+      // linked account. Auth.js refuses that by default and bounces to
+      // /login?error=OAuthAccountNotLinked — which is why signing in "just
+      // didn't work" with nothing on screen.
+      //
+      // It is called dangerous because a provider that does not verify email
+      // ownership would let anyone claim an existing account. That does not
+      // apply here: Google verifies the address, the signIn callback below
+      // rejects anything outside @ymu.org, and the consent screen is Internal
+      // to the youngmusiciansunite.org workspace.
+      allowDangerousEmailAccountLinking: true,
       authorization: {
         params: {
           // Hint the Google login screen to pre-fill @ymu.org accounts.

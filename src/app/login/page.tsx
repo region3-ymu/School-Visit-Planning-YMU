@@ -4,13 +4,26 @@ import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 
+// A failed Google sign-in comes back as ?error=CODE on this page. Without
+// these, the button just silently returns you here with no explanation.
+const OAUTH_ERRORS: Record<string, string> = {
+  OAuthAccountNotLinked:
+    "That Google account isn't linked to your user yet. Sign in with your email and password once, or ask an admin to link it.",
+  AccessDenied: "That account isn't allowed. Sign in with an @ymu.org account.",
+  Configuration: "Sign-in is misconfigured on the server. Tell an admin.",
+  Verification: "That sign-in link expired. Try again.",
+};
+
 function LoginForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") ?? "/";
+  const oauthError = searchParams.get("error");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    oauthError ? (OAUTH_ERRORS[oauthError] ?? `Sign-in failed (${oauthError}).`) : null
+  );
   const [loading, setLoading] = useState(false);
 
   const handleCredentials = async (e: React.FormEvent) => {
