@@ -1,5 +1,11 @@
-import { auth } from "@/auth";
+import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
+import authConfig from "@/auth.config";
+
+// Deliberately NOT `import { auth } from "@/auth"` — that pulls PrismaAdapter
+// and bcrypt into the Edge bundle, where they cannot run, and every request
+// 500s on Vercel. auth.config.ts is the edge-safe half.
+const { auth } = NextAuth(authConfig);
 
 export default auth((req) => {
   const isLoggedIn = !!req.auth;

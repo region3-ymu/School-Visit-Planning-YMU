@@ -1,26 +1,21 @@
 import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import authConfig from "@/auth.config";
 
+/**
+ * The full auth setup: the edge-safe config plus everything that needs the
+ * database. Only Node route handlers and server actions may import this — the
+ * middleware imports auth.config.ts instead. See the comment there for why.
+ */
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  ...authConfig,
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "jwt" },
 
   providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-      authorization: {
-        params: {
-          // Hint the Google login screen to pre-fill @ymu.org accounts.
-          // The actual domain check is enforced in signIn callback below.
-          hd: "ymu.org",
-        },
-      },
-    }),
+    ...authConfig.providers,
 
     Credentials({
       credentials: {
@@ -49,16 +44,12 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
   ],
 
   callbacks: {
-    async signIn({ account, profile }) {
-      if (account?.provider === "google") {
-        // Defense-in-depth: the hd param is only a UI hint; validate the domain here.
-        return Boolean(profile?.email?.endsWith("@ymu.org"));
-      }
-      return true;
-    },
+    ...authConfig.callbacks,
 
     async jwt({ token, user }) {
-      // Only query DB on initial sign-in (when `user` is populated)
+      // Only query the DB on initial sign-in (when `user` is populated). What
+      // it writes onto the token is what lets the middleware authorize without
+      // a database round trip.
       if (user) {
         const dbUser = await prisma.user.findUnique({
           where: { id: user.id! },
@@ -72,17 +63,5 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       }
       return token;
     },
-
-    async session({ session, token }) {
-      session.user.id = token.sub!;
-      session.user.role = token.role as import("@prisma/client").Role;
-      session.user.regionId = (token.regionId as string | null) ?? null;
-      session.user.regionName = (token.regionName as string | null) ?? null;
-      return session;
-    },
-  },
-
-  pages: {
-    signIn: "/login",
   },
 });
