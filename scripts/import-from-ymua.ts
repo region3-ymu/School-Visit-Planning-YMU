@@ -130,19 +130,35 @@ async function main() {
   const regionByCode = new Map(regions.map((r) => [r.code, r.id]));
 
   const localSchools = await prisma.school.findMany({
-    select: { id: true, name: true, externalId: true },
+    select: { id: true, name: true, externalId: true, active: true },
   });
   const byExternalId = new Map(
     localSchools.filter((s) => s.externalId).map((s) => [s.externalId as string, s])
   );
-  // Only schools not yet claimed by an import are adoptable.
-  const unclaimedByName = new Map<string, { id: string; name: string }>();
+
+  // Only schools not yet claimed by an import are adoptable. Group by
+  // normalized name first: this database already holds duplicate pairs (an
+  // active school carrying all the visits and class sessions, plus a
+  // zero-data inactive twin), so "one name, one row" cannot be assumed.
+  const unclaimedGroups = new Map<string, typeof localSchools>();
   for (const school of localSchools) {
     if (school.externalId) continue;
     const key = normalizeSchoolName(school.name);
-    // A duplicate normalized name locally means we cannot safely adopt either.
-    if (unclaimedByName.has(key)) unclaimedByName.set(key, { id: "", name: "AMBIGUOUS" });
-    else unclaimedByName.set(key, { id: school.id, name: school.name });
+    if (!unclaimedGroups.has(key)) unclaimedGroups.set(key, []);
+    unclaimedGroups.get(key)!.push(school);
+  }
+
+  const unclaimedByName = new Map<string, { id: string; name: string }>();
+  for (const [key, group] of unclaimedGroups) {
+    // With duplicates, the active row is the real one — it is where the visit
+    // history hangs. Adopting the inactive twin would strand that history.
+    const candidates = group.length === 1 ? group : group.filter((s) => s.active);
+    unclaimedByName.set(
+      key,
+      candidates.length === 1
+        ? { id: candidates[0].id, name: candidates[0].name }
+        : { id: "", name: "AMBIGUOUS" }
+    );
   }
 
   const plan: PlanRow[] = [];
