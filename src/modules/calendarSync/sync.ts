@@ -330,6 +330,26 @@ export async function syncAllSchoolCalendars(
   }
 
   result.calendarCount = calendars.length;
+
+  // An issue is only ever resolved below when its calendar matches a school —
+  // so a row outlives whatever caused it, and the queue fills with problems
+  // that no longer exist: the calendar was deleted in Google, or it was never
+  // a school calendar and an older run flagged it before that filter existed.
+  // Keeping only calendars still worth reviewing closes both.
+  //
+  // This runs before the per-calendar loop, not after, because an incremental
+  // sync spends minutes making Google calls without touching the database —
+  // long enough for Neon's pooler to drop an idle connection, which made the
+  // same query fail with P1017 every time when it sat at the end.
+  const reviewable = calendars.map((c) => c.id).filter(isSchoolCalendarId);
+  const stale = await prisma.calendarSyncIssue.updateMany({
+    where: { resolvedAt: null, calendarId: { notIn: reviewable } },
+    data: { resolvedAt: new Date() },
+  });
+  if (stale.count > 0 && process.env.NODE_ENV !== "production") {
+    console.log(`Closed ${stale.count} stale issue(s): calendar gone or not a school calendar.`);
+  }
+
   const schools = await prisma.school.findMany({
     where: { active: true },
     select: { id: true, name: true, googleCalendarId: true },
