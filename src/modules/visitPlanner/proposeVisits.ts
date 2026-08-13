@@ -32,6 +32,7 @@ import type { FrequencyType } from "@prisma/client";
 import { addDays, format, startOfWeek } from "date-fns";
 import type { LatLng } from "./distance/types";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
+import { haversineMeters } from "@/lib/geo";
 import type { ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
 import { getDefaultWorkWindow, getFrequencyDays } from "./types";
 
@@ -238,13 +239,11 @@ export async function proposeVisitsForWeek(
       schoolCandidates.push(candidate);
     }
 
-    // If the school teaches at all this week, only offer the days it actually
-    // teaches. Otherwise the packer below can spend the school on an empty
-    // Monday and it can never be picked for the Thursday it has a class on —
-    // which is how a school with 106 sessions ended up proposed as a
-    // "no class scheduled" admin visit.
-    const teachingDays = schoolCandidates.filter((c) => !c.noClassWarning);
-    const usable = teachingDays.length > 0 ? teachingDays : schoolCandidates;
+    // A day the school does not teach is not a visit. There is no fallback to
+    // an "admin / catch-up" slot: a school with nothing on its calendar this
+    // week simply isn't proposed, rather than filling the plan with stops that
+    // have nothing to observe.
+    const usable = schoolCandidates.filter((c) => !c.noClassWarning);
 
     for (const candidate of usable) {
       if (!candidatesByDay.has(candidate.dayStr)) candidatesByDay.set(candidate.dayStr, []);
@@ -252,27 +251,67 @@ export async function proposeVisitsForWeek(
     }
   }
 
-  // Selection is global, not day by day. Walking Mon → Fri and filling each
-  // day before looking at the next means the first days win every tie, and a
-  // school gets consumed on Monday before Thursday — where it teaches — is
-  // ever considered. Ranking every (school, day) pair together lets the class
-  // bonus actually decide which day a school is visited on.
+  // Selection rule: schools that are close together AND teaching that day.
+  //
+  // Every candidate here already teaches on its day, so the remaining decision
+  // is which of them to group. Each day is seeded with the school that is most
+  // overdue, then grown by repeatedly adding whichever remaining school is
+  // physically closest to the ones already picked — so a day is a tight
+  // cluster of stops rather than a drive across the county.
+  //
+  // Distance here is straight-line, not road time: choosing the cluster needs
+  // every pair of candidates compared, which would be hundreds of routing
+  // calls per day. Road time still decides the order of the stops once the
+  // cluster is fixed, below.
   const scheduledSchoolIds = new Set<string>();
   const chosenByDay = new Map<string, Candidate[]>();
   let weeklyCount = 0;
 
-  const ranked = [...candidatesByDay.values()].flat().sort((a, b) => b.score - a.score);
-  for (const candidate of ranked) {
+  const distanceToCluster = (candidate: Candidate, cluster: Candidate[]): number => {
+    if (candidate.lat == null || candidate.lng == null) return Infinity;
+    let nearest = Infinity;
+    for (const member of cluster) {
+      if (member.lat == null || member.lng == null) continue;
+      nearest = Math.min(
+        nearest,
+        haversineMeters(candidate.lat, candidate.lng, member.lat, member.lng)
+      );
+    }
+    return nearest;
+  };
+
+  for (const day of weekDates) {
     if (weeklyCount >= maxVisitsPerWeek) break;
-    if (scheduledSchoolIds.has(candidate.schoolId)) continue;
 
-    const dayList = chosenByDay.get(candidate.dayStr) ?? [];
-    if (dayList.length >= maxVisitsPerDay) continue;
+    const dayStr = format(day, "yyyy-MM-dd");
+    const pool = (candidatesByDay.get(dayStr) ?? [])
+      .filter((c) => !scheduledSchoolIds.has(c.schoolId))
+      .sort((a, b) => b.score - a.score);
+    if (pool.length === 0) continue;
 
-    dayList.push(candidate);
-    chosenByDay.set(candidate.dayStr, dayList);
-    scheduledSchoolIds.add(candidate.schoolId);
-    weeklyCount += 1;
+    const room = Math.min(maxVisitsPerDay, maxVisitsPerWeek - weeklyCount);
+    const cluster: Candidate[] = [pool.shift()!];
+
+    while (cluster.length < room && pool.length > 0) {
+      // Falls back to index 0 — the most overdue — when no candidate has
+      // usable coordinates, since every distance is then Infinity.
+      let bestIndex = 0;
+      let bestDistance = Infinity;
+      for (let i = 0; i < pool.length; i += 1) {
+        const distance = distanceToCluster(pool[i], cluster);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = i;
+        }
+      }
+      cluster.push(pool.splice(bestIndex, 1)[0]);
+    }
+
+    for (const c of cluster) {
+      scheduledSchoolIds.add(c.schoolId);
+      weeklyCount += 1;
+    }
+    chosenByDay.set(dayStr, cluster);
   }
 
   // Then order each day's picks: chronological, refined by travel time.
