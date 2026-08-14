@@ -66,6 +66,12 @@ export default function ConfirmVisitModal({
   onClose: () => void;
   onConfirmed: () => void;
 }) {
+  // Not every visit is a drive. Online and phone visits still record who was
+  // met and what came of it, but there is no location to verify, no leg to
+  // bill as mileage, and no class in the room to observe.
+  const [mode, setMode] = useState<"IN_PERSON" | "ONLINE" | "PHONE">("IN_PERSON");
+  const isRemote = mode !== "IN_PERSON";
+
   const [geofenceStatus, setGeofenceStatus] = useState<GeofenceStatus>("checking");
   const [geofenceDistanceM, setGeofenceDistanceM] = useState<number | null>(null);
   const [geofenceError, setGeofenceError] = useState<string | null>(null);
@@ -145,16 +151,17 @@ export default function ConfirmVisitModal({
   };
 
   const canConfirm =
-    (geofenceStatus === "ok" || overrideGeofence) &&
-    (chainState.status !== "needs-input" ||
-      (originMode === "home" ? !!homeAddress.trim() : !!customAddress.trim()));
+    isRemote ||
+    ((geofenceStatus === "ok" || overrideGeofence) &&
+      (chainState.status !== "needs-input" ||
+        (originMode === "home" ? !!homeAddress.trim() : !!customAddress.trim())));
 
   const toggleVisitedWith = (value: string) => {
     setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
   };
 
   const showTalkAbout = visitedWith.some((v) => TALK_ABOUT_TRIGGERS.includes(v));
-  const showTeacherObservation = visitedWith.includes("YMU_TEACHER");
+  const showTeacherObservation = !isRemote && visitedWith.includes("YMU_TEACHER");
 
   const setObservation = (key: ObservationDomainKey, value: ObservationRating) => {
     setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
@@ -172,7 +179,7 @@ export default function ConfirmVisitModal({
     try {
       let origin: { lat: number; lng: number; label?: string } | undefined;
 
-      if (chainState.status === "needs-input") {
+      if (!isRemote && chainState.status === "needs-input") {
         if (originMode === "home" && savedHomeAddress && homeAddress.trim() === savedHomeAddress.address) {
           origin = { lat: savedHomeAddress.lat, lng: savedHomeAddress.lng, label: "Home" };
         } else {
@@ -189,13 +196,14 @@ export default function ConfirmVisitModal({
       }
 
       await confirmVisit(schoolId, visitDate.toISOString(), {
+        mode,
         origin,
         visitedWith,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
         hasInstrumentRequest,
         instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
-        geofenceDistanceM: geofenceDistanceM ?? undefined,
-        geofenceOverridden: geofenceStatus !== "ok",
+        geofenceDistanceM: isRemote ? undefined : geofenceDistanceM ?? undefined,
+        geofenceOverridden: isRemote ? false : geofenceStatus !== "ok",
         obsPlanningPrep: observations.obsPlanningPrep ?? undefined,
         obsCultureManagement: observations.obsCultureManagement ?? undefined,
         obsInstructionMusicianship: observations.obsInstructionMusicianship ?? undefined,
@@ -232,7 +240,39 @@ export default function ConfirmVisitModal({
         </div>
 
         <div className="p-5 overflow-y-auto space-y-5">
+          {/* How the visit happened. Chosen first, because it decides whether
+              the rest of the form asks about location and the classroom. */}
+          <div>
+            <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">How did this visit happen?</p>
+            <div className="flex gap-2">
+              {([
+                { value: "IN_PERSON", label: "In person" },
+                { value: "ONLINE", label: "Online" },
+                { value: "PHONE", label: "Phone call" },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setMode(opt.value)}
+                  className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    mode === opt.value
+                      ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300"
+                      : "border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-zinc-800"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {isRemote && (
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                No location check and no mileage for this visit, since you didn&apos;t travel.
+              </p>
+            )}
+          </div>
+
           {/* Geofence status */}
+          {!isRemote && (
           <div
             className={`rounded-lg border p-3 text-sm flex items-start gap-2 ${
               geofenceStatus === "ok"
@@ -277,14 +317,16 @@ export default function ConfirmVisitModal({
             </div>
           </div>
 
+          )}
+
           {/* Origin for mileage — only asked for the first visit of the day;
               every visit after that chains automatically from the previous one. */}
-          {chainState.status === "chained" && (
+          {!isRemote && chainState.status === "chained" && (
             <div className="rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/40 p-3 text-sm text-gray-600 dark:text-gray-400">
               Starting from your previous visit today: <span className="font-medium">{chainState.label}</span>
             </div>
           )}
-          {chainState.status === "needs-input" && (
+          {!isRemote && chainState.status === "needs-input" && (
             <div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
                 First visit of the day — starting from?

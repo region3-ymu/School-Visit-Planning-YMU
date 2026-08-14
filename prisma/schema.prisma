@@ -201,6 +201,7 @@ model Visit {
   // ─── Visit confirmation details (captured via the Confirm Visit modal) ──────
   visitedById                   String?
   visitedBy                     User?               @relation(fields: [visitedById], references: [id])
+  mode                          VisitMode           @default(IN_PERSON)
   // Driven distance for this visit's leg, computed server-side from the
   // chosen origin (home/GPS/custom address) to the school's coordinates.
   milesDriven                   Decimal?            @db.Decimal(6, 2)
@@ -269,6 +270,15 @@ enum VisitStatus {
 enum VisitOutcome {
   GOOD
   REGULAR
+}
+
+// How the visit actually happened. A remote visit still records who was met
+// and what was discussed, but there is no drive to measure and no class in the
+// room to observe.
+enum VisitMode {
+  IN_PERSON
+  ONLINE
+  PHONE
 }
 
 enum VisitedWithOption {

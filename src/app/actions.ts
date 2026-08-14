@@ -311,6 +311,9 @@ const confirmVisitSchema = z
     // Only used for the first visit of the day (client asks the RM where
     // they're starting from). Every subsequent visit that day is chained
     // server-side from the previous confirmed visit and this is ignored.
+    // In person is the default; online and phone visits skip the drive and
+    // the classroom observation entirely.
+    mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
     principalNotes: z.string().max(2000).optional(),
@@ -441,7 +444,11 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   let milesDriven: number | null = null;
   let originLabel: string | null = null;
 
-  if (school.lat != null && school.lng != null) {
+  // A remote visit has no leg to measure. Leaving milesDriven null (rather than
+  // zero) is what keeps it out of the mileage report entirely.
+  const isRemote = data.mode !== "IN_PERSON";
+
+  if (!isRemote && school.lat != null && school.lng != null) {
     try {
       const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
       if (origin) {
@@ -479,20 +486,24 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         status: "DONE",
         reason: "Confirmed via Weekly Planner",
         visitedById: user.id,
+        mode: data.mode,
         milesDriven: milesDriven ?? undefined,
         originLabel: originLabel ?? undefined,
         visitedWith: data.visitedWith,
         principalNotes: data.principalNotes ?? undefined,
         hasInstrumentRequest: data.hasInstrumentRequest,
         instrumentRequestDetails: data.instrumentRequestDetails ?? undefined,
-        geofenceDistanceM: data.geofenceDistanceM ?? undefined,
-        geofenceOverridden: data.geofenceOverridden,
-        obsPlanningPrep: data.obsPlanningPrep,
-        obsCultureManagement: data.obsCultureManagement,
-        obsInstructionMusicianship: data.obsInstructionMusicianship,
-        obsEngagementEvidence: data.obsEngagementEvidence,
-        obsProfessionalismGrowth: data.obsProfessionalismGrowth,
-        obsNotes: data.obsNotes ?? undefined,
+        // Location and classroom observation only mean something in person.
+        // Dropped server-side too, so a stale client cannot record a geofence
+        // check or a lesson rubric for a phone call.
+        geofenceDistanceM: isRemote ? undefined : data.geofenceDistanceM ?? undefined,
+        geofenceOverridden: isRemote ? false : data.geofenceOverridden,
+        obsPlanningPrep: isRemote ? undefined : data.obsPlanningPrep,
+        obsCultureManagement: isRemote ? undefined : data.obsCultureManagement,
+        obsInstructionMusicianship: isRemote ? undefined : data.obsInstructionMusicianship,
+        obsEngagementEvidence: isRemote ? undefined : data.obsEngagementEvidence,
+        obsProfessionalismGrowth: isRemote ? undefined : data.obsProfessionalismGrowth,
+        obsNotes: isRemote ? undefined : data.obsNotes ?? undefined,
       },
     });
   });
