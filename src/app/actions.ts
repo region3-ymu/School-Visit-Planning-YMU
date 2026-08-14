@@ -84,6 +84,7 @@ export async function getWeeklyPlan(
   weekStartDateIso: string,
   manualOverrides: Partial<VisitInfo>[] = [],
   maxVisitsPerWeek: number = 12,
+  maxVisitsPerDay: number = 4,
   regionFilter?: string | null
 ): Promise<VisitInfo[]> {
   const session = await auth();
@@ -104,6 +105,7 @@ export async function getWeeklyPlan(
   const proposed = await proposeVisitsForWeek(prisma, weekStart, {
     regionId,
     maxVisitsPerWeek,
+    maxVisitsPerDay,
     distanceService,
   });
 

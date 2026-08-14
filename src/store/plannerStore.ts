@@ -19,6 +19,9 @@ interface PlannerState {
 
     maxVisitsPerWeek: number;
     setMaxVisitsPerWeek: (max: number) => void;
+
+    maxVisitsPerDay: number;
+    setMaxVisitsPerDay: (max: number) => void;
 }
 
 const OVERRIDE_RETENTION_DAYS = 14;
@@ -51,6 +54,9 @@ export const usePlannerStore = create<PlannerState>()(
 
             maxVisitsPerWeek: 5,
             setMaxVisitsPerWeek: (max) => set({ maxVisitsPerWeek: max }),
+
+            maxVisitsPerDay: 4,
+            setMaxVisitsPerDay: (max) => set({ maxVisitsPerDay: max }),
         }),
         {
             name: 'planner-storage',
@@ -59,6 +65,7 @@ export const usePlannerStore = create<PlannerState>()(
                 plannedVisits: state.plannedVisits,
                 weekStartDateStr: state.weekStartDateStr,
                 maxVisitsPerWeek: state.maxVisitsPerWeek,
+                maxVisitsPerDay: state.maxVisitsPerDay,
             }),
             // Drop overrides older than 14 days on hydration (AUDIT #7)
             merge: (persisted: unknown, current) => {

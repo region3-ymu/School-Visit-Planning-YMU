@@ -28,7 +28,7 @@ const FREQ_BADGE: Record<string, { label: string; cls: string }> = {
 
 export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string | null }) {
 
-    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, plannedVisits, setPlannedVisits, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
+    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
 
     const weekStartDate = new Date(weekStartDateStr);
 
@@ -63,7 +63,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
     const fetchPlan = async () => {
 
         setLoading(true);
-        const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, regionFilter);
+        const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
         setPlannedVisits(plan);
         setLoading(false);
 
@@ -269,7 +269,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
         const updatedOverrides = [...manualOverrides, newOverride];
 
-        const plan = await getWeeklyPlan(weekStartDate.toISOString(), updatedOverrides, maxVisitsPerWeek, regionFilter);
+        const plan = await getWeeklyPlan(weekStartDate.toISOString(), updatedOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
 
         setPlannedVisits(plan);
 
@@ -296,7 +296,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
             setLoading(true);
 
-            const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, regionFilter);
+            const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
 
             if (isMounted) {
 
@@ -314,7 +314,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
         // eslint-disable-next-line react-hooks/exhaustive-deps
 
-    }, [weekStartDateStr, regionFilter]);
+    }, [weekStartDateStr, regionFilter, maxVisitsPerWeek, maxVisitsPerDay]);
 
 
 
@@ -372,9 +372,33 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                         >
 
-                            {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(num => (
+                            {[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 16, 18, 20, 24].map(num => (
 
                                 <option key={num} value={num}>{num} / week</option>
+
+                            ))}
+
+                        </select>
+
+                    </div>
+
+                    <div className="flex items-center space-x-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg px-3 py-1.5">
+
+                        <label className="text-sm text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">Per day:</label>
+
+                        <select
+
+                            value={maxVisitsPerDay}
+
+                            onChange={(e) => setMaxVisitsPerDay(Number(e.target.value))}
+
+                            className="bg-transparent border-none text-sm font-bold text-gray-800 dark:text-gray-200 focus:ring-0 cursor-pointer"
+
+                        >
+
+                            {[2, 3, 4, 5, 6, 7, 8].map(num => (
+
+                                <option key={num} value={num}>max {num}</option>
 
                             ))}
 

@@ -375,7 +375,15 @@ export async function proposeVisitsForWeek(
   // put something on every day: a Wednesday where one school teaches is better
   // left empty than spent on a lone stop, when that school can instead join a
   // Thursday that already has three others nearby.
+  //
+  // Days that have already been and gone are filled last. Mid-week, a school is
+  // only schedulable once, so letting Monday through Thursday claim schools
+  // leaves today's plan picked over — on Friday morning Brownsville and Charles
+  // R. Drew were both missing because Thursday had already spent them.
+  const isPast = (day: Date) => day < today;
   const daysByOpportunity = [...weekDates].sort((a, b) => {
+    if (isPast(a) !== isPast(b)) return isPast(a) ? 1 : -1;
+
     const aCount = (candidatesByDay.get(format(a, "yyyy-MM-dd")) ?? []).length;
     const bCount = (candidatesByDay.get(format(b, "yyyy-MM-dd")) ?? []).length;
     return bCount !== aCount ? bCount - aCount : a.getTime() - b.getTime();
