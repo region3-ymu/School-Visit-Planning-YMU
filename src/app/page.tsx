@@ -12,7 +12,7 @@ import MapZoneView from "@/components/MapZoneView";
 import VisitHistory from "@/components/VisitHistory";
 import AIChat from "@/components/AIChat";
 import {
-  Compass, CalendarDays, Users, Map as MapIcon, History, UserRoundSearch, LogOut, ChevronDown,
+  Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown,
 } from "lucide-react";
 
 function HomeInner() {
@@ -47,7 +47,6 @@ function HomeInner() {
     { id: "dashboard", label: "Dashboard", icon: Compass },
     { id: "planner", label: "Weekly Planner", icon: CalendarDays },
     { id: "history", label: "Visit History", icon: History },
-    { id: "substitutions", label: "Sustitutos", icon: UserRoundSearch },
     { id: "profiles", label: "Schools", icon: Users },
     { id: "map", label: "Zone Map", icon: MapIcon },
   ] as const;
@@ -132,13 +131,6 @@ function HomeInner() {
           {activeTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
           {activeTab === "planner" && <WeeklyPlanner regionFilter={selectedRegionId || null} />}
           {activeTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
-          {activeTab === "substitutions" && (
-            <iframe
-              src="/substitutions"
-              className="w-full h-[calc(100vh-0px)] border-0"
-              title="Substitutions"
-            />
-          )}
           {activeTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
           {activeTab === "map" && <MapZoneView />}
         </div>

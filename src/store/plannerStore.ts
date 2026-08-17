@@ -4,8 +4,8 @@ import { format, subDays } from 'date-fns';
 import { VisitInfo } from '../lib/types';
 
 interface PlannerState {
-    activeTab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'substitutions';
-    setActiveTab: (tab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'substitutions') => void;
+    activeTab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history';
+    setActiveTab: (tab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history') => void;
 
     weekStartDateStr: string;
     setWeekStartDate: (date: Date) => void;
