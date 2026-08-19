@@ -2,7 +2,7 @@
 
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { requireUser, schoolRegionWhere } from "@/lib/auth-helpers";
+import { requireUser, schoolRegionWhere, scopeToRegion } from "@/lib/auth-helpers";
 import { VisitInfo } from "@/lib/types";
 import { format, addDays, startOfWeek } from "date-fns";
 import { proposeVisitsForWeek } from "@/modules/visitPlanner";
@@ -78,6 +78,40 @@ export async function getSchools(regionFilter?: string | null) {
     where: { ...regionWhere, active: true },
     orderBy: { name: "asc" },
   });
+}
+
+/**
+ * Active schools that sit OUTSIDE the caller's own region, for the "Other region
+ * school" picker when logging a visit manually (a mentor covering elsewhere).
+ *
+ * Returns [] for ADMINs — they aren't scoped to a region, so `getSchools` already
+ * lists every school and nothing counts as "other".
+ *
+ * Schools with no region at all are grouped under "Unassigned". The null branch is
+ * spelled out because Prisma's `{ not: x }` on a nullable column does not reliably
+ * mean "including NULLs" across versions.
+ */
+export async function getOtherRegionSchools() {
+  const session = await auth();
+  const user = requireUser(session);
+  const ownRegionId = scopeToRegion(user);
+
+  if (ownRegionId === undefined) return [];
+
+  const schools = await prisma.school.findMany({
+    where: {
+      active: true,
+      OR: [{ regionId: { not: ownRegionId } }, { regionId: null }],
+    },
+    select: { id: true, name: true, region: { select: { name: true } } },
+    orderBy: [{ region: { name: "asc" } }, { name: "asc" }],
+  });
+
+  return schools.map((s) => ({
+    id: s.id,
+    name: s.name,
+    regionName: s.region?.name ?? "Unassigned",
+  }));
 }
 
 export async function getWeeklyPlan(
@@ -536,21 +570,30 @@ export async function getVisitHistory(regionFilter?: string | null) {
   const user = requireUser(session);
   const baseWhere = schoolRegionWhere(user);
 
-  const effectiveRegionId =
-    user.role === "ADMIN" && regionFilter
-      ? regionFilter
-      : baseWhere.regionId !== undefined
-      ? baseWhere.regionId
-      : undefined;
+  // An ADMIN passing a regionFilter is inspecting that region, not reviewing their
+  // own work, so the "my own visits" escape hatch below must not widen their filter.
+  const isAdminFilter = user.role === "ADMIN" && !!regionFilter;
+  const effectiveRegionId = isAdminFilter
+    ? regionFilter
+    : baseWhere.regionId !== undefined
+    ? baseWhere.regionId
+    : undefined;
 
   const visits = await prisma.visit.findMany({
     where: {
       status: "DONE",
       ...(effectiveRegionId !== undefined
-        ? { school: { regionId: effectiveRegionId } }
+        ? {
+            OR: [
+              { school: { regionId: effectiveRegionId } },
+              // A visit this user logged against another region's school is still
+              // theirs; without this it would vanish from the list on save.
+              ...(isAdminFilter ? [] : [{ visitedById: user.id }]),
+            ],
+          }
         : {}),
     },
-    include: { school: true },
+    include: { school: { include: { region: { select: { name: true } } } } },
     orderBy: { plannedStartDateTime: "desc" },
   });
 
@@ -561,10 +604,18 @@ export async function getVisitHistory(regionFilter?: string | null) {
     date: v.plannedStartDateTime,
     notes: v.reason,
     school: v.school,
+    // Non-null only for rows outside the region being viewed, so the table can flag them.
+    otherRegionName:
+      effectiveRegionId !== undefined && v.school.regionId !== effectiveRegionId
+        ? v.school.region?.name ?? "Unassigned"
+        : null,
   }));
 }
 
 export async function addManualVisit(schoolId: string, dateIso: string, notes: string) {
+  const session = await auth();
+  const user = requireUser(session);
+
   const date = new Date(dateIso);
   const plannedStart = new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
@@ -577,6 +628,9 @@ export async function addManualVisit(schoolId: string, dateIso: string, notes: s
       plannedEndDateTime: plannedEnd,
       status: "DONE",
       reason: notes,
+      // Deliberately not region-checked: logging a visit to another region's school
+      // is supported. Stamping the author is what keeps it in their own history.
+      visitedById: user.id,
     },
   });
   return serializeVisit(visit);

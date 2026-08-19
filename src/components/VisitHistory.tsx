@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getVisitHistory, addManualVisit, getSchools, deleteVisitLog, editVisitLog, getQuarters } from "@/app/actions";
+import { getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools, deleteVisitLog, editVisitLog, getQuarters } from "@/app/actions";
 import { format } from "date-fns";
 import { History, Plus, CheckCircle, Database, Edit2, Trash2, Download } from "lucide-react";
 
 export default function VisitHistory({ regionFilter }: { regionFilter?: string | null }) {
     const [history, setHistory] = useState<any[]>([]);
     const [schools, setSchools] = useState<any[]>([]);
+    const [otherSchools, setOtherSchools] = useState<{ id: string; name: string; regionName: string }[]>([]);
     const [loading, setLoading] = useState(true);
     const [filterMonth, setFilterMonth] = useState<string>(new Date().getMonth().toString());
 
@@ -43,7 +44,19 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             setQuarters(q);
             if (q.length > 0) setSelectedQuarterKey(`${q[0].schoolYear}|${q[0].label}`);
         });
+        // Keyed off the signed-in user's own region, not the admin regionFilter, so
+        // this only needs to run once. Empty for admins, who already see every school.
+        getOtherRegionSchools().then(setOtherSchools);
     }, []);
+
+    // Which of the two pickers owns the current selection — derived, so editing an
+    // existing log lights up the right one without extra state to keep in sync.
+    const isOtherRegionPick = otherSchools.some(s => s.id === selectedSchool);
+
+    const otherSchoolsByRegion = otherSchools.reduce<Record<string, typeof otherSchools>>((acc, s) => {
+        (acc[s.regionName] ||= []).push(s);
+        return acc;
+    }, {});
 
     const reportUrl = (() => {
         if (!selectedQuarterKey) return null;
@@ -201,6 +214,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                             </td>
                                             <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">
                                                 {log.school.name}
+                                                {log.otherRegionName && (
+                                                    <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-semibold align-middle">
+                                                        {log.otherRegionName}
+                                                    </span>
+                                                )}
                                             </td>
                                             <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
                                                 {log.notes}
@@ -238,20 +256,47 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">✕</button>
                         </div>
                         <div className="p-6 space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">School</label>
-                                <select
-                                    value={selectedSchool}
-                                    onChange={(e) => setSelectedSchool(e.target.value)}
-                                    disabled={!!editingId}
-                                    className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100 disabled:opacity-50"
-                                >
-                                    <option value="" disabled>Select a school...</option>
-                                    {schools.map(s => (
-                                        <option key={s.id} value={s.id}>{s.name}</option>
-                                    ))}
-                                </select>
+                            <div className={otherSchools.length > 0 ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : ""}>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">School</label>
+                                    <select
+                                        value={isOtherRegionPick ? "" : selectedSchool}
+                                        onChange={(e) => setSelectedSchool(e.target.value)}
+                                        disabled={!!editingId}
+                                        className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                                    >
+                                        <option value="">Select a school...</option>
+                                        {schools.map(s => (
+                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                {otherSchools.length > 0 && (
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Other region school</label>
+                                        <select
+                                            value={isOtherRegionPick ? selectedSchool : ""}
+                                            onChange={(e) => setSelectedSchool(e.target.value)}
+                                            disabled={!!editingId}
+                                            className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                                        >
+                                            <option value="">None — use my region</option>
+                                            {Object.entries(otherSchoolsByRegion).map(([regionName, list]) => (
+                                                <optgroup key={regionName} label={regionName}>
+                                                    {list.map(s => (
+                                                        <option key={s.id} value={s.id}>{s.name}</option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
                             </div>
+                            {isOtherRegionPick && (
+                                <p className="text-xs text-amber-600 dark:text-amber-400 -mt-2">
+                                    Logging a visit outside your region ({otherSchools.find(s => s.id === selectedSchool)?.regionName}).
+                                </p>
+                            )}
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date</label>
                                 <input
