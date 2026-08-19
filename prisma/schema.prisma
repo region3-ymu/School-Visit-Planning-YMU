@@ -206,6 +206,10 @@ model Visit {
   // chosen origin (home/GPS/custom address) to the school's coordinates.
   milesDriven                   Decimal?            @db.Decimal(6, 2)
   originLabel                   String?
+  // Closing leg of the day, back to where the RM started. Held on the
+  // day's last visit so a day can only ever carry one return.
+  returnMilesDriven             Decimal?            @db.Decimal(6, 2)
+  returnLabel                   String?
   outcome                       VisitOutcome?
   outcomeNotes                  String?
   visitedWith                   VisitedWithOption[]
@@ -229,6 +233,10 @@ model Visit {
   obsProfessionalismGrowth      ObservationRating?
   // Single shared notes field covering all 5 domains, not one per domain.
   obsNotes                      String?
+  // Why the rubric above is blank. Without this, an unrated visit is
+  // indistinguishable from an RM who simply skipped the paperwork.
+  obsSkipReason                 ObservationSkipReason?
+  obsSkipNotes                  String?
 
   @@index([schoolId])
   @@index([status])
@@ -293,6 +301,15 @@ enum ObservationRating {
   DEVELOPING
   MEETS
   EXCEEDS
+}
+
+/// Why a YMU-teacher visit carries no observation ratings.
+enum ObservationSkipReason {
+  NO_CLASS_TODAY
+  CLASS_CANCELLED
+  TEACHER_ABSENT
+  SCHEDULE_CONFLICT
+  OTHER
 }
 
 // ─── Route optimization cache ───────────────────────────────────────────────────
