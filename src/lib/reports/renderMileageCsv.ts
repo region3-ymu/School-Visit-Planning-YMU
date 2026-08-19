@@ -7,7 +7,7 @@ function csvEscape(value: string): string {
 
 /** Raw one-row-per-visit CSV, best for pivoting in Excel/Sheets. */
 export function renderMileageCsv(data: MileageReportData): string {
-  const rows = ["School,Region,Regional Manager,Date,Miles Driven"];
+  const rows = ["School,Region,Regional Manager,Date,Mode,Miles To School,Return Miles,Total Miles"];
   for (const v of data.visits) {
     rows.push(
       [
@@ -15,7 +15,10 @@ export function renderMileageCsv(data: MileageReportData): string {
         csvEscape(v.regionName ?? ""),
         csvEscape(v.visitedByName),
         v.date.toISOString().slice(0, 10),
+        csvEscape(v.mode),
         v.milesDriven.toFixed(2),
+        v.returnMiles.toFixed(2),
+        (v.milesDriven + v.returnMiles).toFixed(2),
       ].join(",")
     );
   }

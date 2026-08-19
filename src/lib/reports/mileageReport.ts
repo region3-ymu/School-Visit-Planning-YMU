@@ -2,8 +2,11 @@ import type { PrismaClient } from "@prisma/client";
 import { decimalToNumber } from "@/lib/decimal";
 
 export type MileageReportData = {
-  quarter: { schoolYear: string; label: string; startDate: Date; endDate: Date };
+  /** Human-readable name of the window, e.g. "2026-27 Q2" or "Aug 2026". */
+  period: { label: string; startDate: Date; endDate: Date };
   totalMiles: number;
+  outboundMiles: number;
+  returnMiles: number;
   byRM: { userId: string; userName: string; totalMiles: number; visitCount: number }[];
   bySchool: { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }[];
   visits: {
@@ -12,26 +15,33 @@ export type MileageReportData = {
     visitedByName: string;
     date: Date;
     milesDriven: number;
+    returnMiles: number;
+    mode: string;
   }[];
+};
+
+export type MileageReportParams = {
+  startDate: Date;
+  endDate: Date;
+  label: string;
+  regionId?: string;
+  /** Narrow the report to a single regional manager. */
+  visitedById?: string;
 };
 
 export async function getMileageReportData(
   prisma: PrismaClient,
-  params: { schoolYear: string; quarterLabel: string; regionId?: string }
+  params: MileageReportParams
 ): Promise<MileageReportData> {
-  const quarter = await prisma.quarter.findUnique({
-    where: { schoolYear_label: { schoolYear: params.schoolYear, label: params.quarterLabel } },
-  });
-  if (!quarter) {
-    throw new Error(`No Quarter found for ${params.schoolYear} ${params.quarterLabel}`);
-  }
-
   const visits = await prisma.visit.findMany({
     where: {
       status: "DONE",
-      milesDriven: { not: null },
-      plannedStartDateTime: { gte: quarter.startDate, lte: quarter.endDate },
+      // A visit with neither leg measured contributes no miles but would still
+      // inflate the visit counts below.
+      OR: [{ milesDriven: { not: null } }, { returnMilesDriven: { not: null } }],
+      plannedStartDateTime: { gte: params.startDate, lte: params.endDate },
       ...(params.regionId ? { school: { regionId: params.regionId } } : {}),
+      ...(params.visitedById ? { visitedById: params.visitedById } : {}),
     },
     include: {
       school: { select: { id: true, name: true, region: { select: { name: true } } } },
@@ -42,13 +52,19 @@ export async function getMileageReportData(
 
   const byRMMap = new Map<string, { userId: string; userName: string; totalMiles: number; visitCount: number }>();
   const bySchoolMap = new Map<string, { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }>();
-  let totalMiles = 0;
+  let outboundMiles = 0;
+  let returnMiles = 0;
 
   const reportVisits: MileageReportData["visits"] = [];
 
   for (const v of visits) {
-    const miles = decimalToNumber(v.milesDriven) ?? 0;
-    totalMiles += miles;
+    const outbound = decimalToNumber(v.milesDriven) ?? 0;
+    const back = decimalToNumber(v.returnMilesDriven) ?? 0;
+    // The drive home is booked on the day's last visit, so it rolls up under the
+    // same RM and school as that visit's outbound leg.
+    const miles = outbound + back;
+    outboundMiles += outbound;
+    returnMiles += back;
 
     const rmId = v.visitedById ?? "unknown";
     const rmName = v.visitedBy?.name ?? v.visitedBy?.email ?? "Unknown";
@@ -73,18 +89,17 @@ export async function getMileageReportData(
       regionName: v.school.region?.name ?? null,
       visitedByName: rmName,
       date: v.plannedStartDateTime,
-      milesDriven: miles,
+      milesDriven: outbound,
+      returnMiles: back,
+      mode: v.mode,
     });
   }
 
   return {
-    quarter: {
-      schoolYear: quarter.schoolYear,
-      label: quarter.label,
-      startDate: quarter.startDate,
-      endDate: quarter.endDate,
-    },
-    totalMiles,
+    period: { label: params.label, startDate: params.startDate, endDate: params.endDate },
+    totalMiles: outboundMiles + returnMiles,
+    outboundMiles,
+    returnMiles,
     byRM: [...byRMMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     bySchool: [...bySchoolMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     visits: reportVisits,

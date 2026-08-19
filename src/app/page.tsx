@@ -10,9 +10,10 @@ import WeeklyPlanner from "@/components/WeeklyPlanner";
 import SchoolProfiles from "@/components/SchoolProfiles";
 import MapZoneView from "@/components/MapZoneView";
 import VisitHistory from "@/components/VisitHistory";
+import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
 import {
-  Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown,
+  Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3,
 } from "lucide-react";
 
 function HomeInner() {
@@ -49,6 +50,7 @@ function HomeInner() {
     { id: "history", label: "Visit History", icon: History },
     { id: "profiles", label: "Schools", icon: Users },
     { id: "map", label: "Zone Map", icon: MapIcon },
+    { id: "reports", label: "Reports", icon: BarChart3 },
   ] as const;
 
   return (
@@ -133,6 +135,7 @@ function HomeInner() {
           {activeTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
           {activeTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
           {activeTab === "map" && <MapZoneView />}
+          {activeTab === "reports" && <MileageReports regionFilter={selectedRegionId || null} />}
         </div>
       </main>
 

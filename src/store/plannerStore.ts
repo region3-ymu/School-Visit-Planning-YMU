@@ -3,9 +3,11 @@ import { persist } from 'zustand/middleware';
 import { format, subDays } from 'date-fns';
 import { VisitInfo } from '../lib/types';
 
+type PlannerTab = 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'reports';
+
 interface PlannerState {
-    activeTab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history';
-    setActiveTab: (tab: 'dashboard' | 'planner' | 'profiles' | 'map' | 'history') => void;
+    activeTab: PlannerTab;
+    setActiveTab: (tab: PlannerTab) => void;
 
     weekStartDateStr: string;
     setWeekStartDate: (date: Date) => void;

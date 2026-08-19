@@ -16,6 +16,8 @@ import {
 import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClient";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
+import { getMileageReportData } from "@/lib/reports/mileageReport";
+import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
 
 /** Prisma's Decimal isn't plain-serializable across the server/client boundary. */
@@ -340,6 +342,14 @@ const originCoordsSchema = z.object({
 
 const observationRatingSchema = z.enum(["NEEDS_SUPPORT", "DEVELOPING", "MEETS", "EXCEEDS"]);
 
+const observationSkipReasonSchema = z.enum([
+  "NO_CLASS_TODAY",
+  "CLASS_CANCELLED",
+  "TEACHER_ABSENT",
+  "SCHEDULE_CONFLICT",
+  "OTHER",
+]);
+
 const confirmVisitSchema = z
   .object({
     // Only used for the first visit of the day (client asks the RM where
@@ -363,6 +373,9 @@ const confirmVisitSchema = z
     obsEngagementEvidence: observationRatingSchema.optional(),
     obsProfessionalismGrowth: observationRatingSchema.optional(),
     obsNotes: z.string().max(2000).optional(),
+    // Set instead of ratings when there was no lesson to watch.
+    obsSkipReason: observationSkipReasonSchema.optional(),
+    obsSkipNotes: z.string().max(2000).optional(),
   })
   .refine((data) => !data.hasInstrumentRequest || !!data.instrumentRequestDetails?.trim(), {
     message: "instrumentRequestDetails is required when hasInstrumentRequest is true",
@@ -448,6 +461,33 @@ async function resolveVisitOrigin(
   return null;
 }
 
+const METERS_PER_MILE = 1609.344;
+
+/**
+ * Road miles between two points, or null if the routing service can't say.
+ *
+ * Mileage is never worth failing a visit over — an RM standing in a parking lot
+ * should not lose their record because a distance API timed out. Every caller
+ * treats null as "unknown" and saves the visit regardless.
+ */
+async function computeLegMiles(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<number | null> {
+  try {
+    const matrix = await getCachedTravelMatrix(
+      [{ lat: origin.lat, lng: origin.lng }, { lat: destination.lat, lng: destination.lng }],
+      prisma,
+      new OpenRouteDistanceService()
+    );
+    const distanceM = matrix.distances[0]?.[1];
+    if (distanceM != null && Number.isFinite(distanceM)) return distanceM / METERS_PER_MILE;
+  } catch (err) {
+    console.error("mileage calc failed:", err);
+  }
+  return null;
+}
+
 export async function confirmVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
@@ -487,15 +527,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
       const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
       if (origin) {
         originLabel = origin.label;
-        const matrix = await getCachedTravelMatrix(
-          [{ lat: origin.lat, lng: origin.lng }, { lat: school.lat, lng: school.lng }],
-          prisma,
-          new OpenRouteDistanceService()
-        );
-        const distanceM = matrix.distances[0]?.[1];
-        if (distanceM != null && Number.isFinite(distanceM)) {
-          milesDriven = distanceM / 1609.344;
-        }
+        milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
       }
     } catch (err) {
       console.error("confirmVisit mileage calc failed:", err);
@@ -538,6 +570,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         obsEngagementEvidence: isRemote ? undefined : data.obsEngagementEvidence,
         obsProfessionalismGrowth: isRemote ? undefined : data.obsProfessionalismGrowth,
         obsNotes: isRemote ? undefined : data.obsNotes ?? undefined,
+        obsSkipReason: isRemote ? undefined : data.obsSkipReason,
+        obsSkipNotes: isRemote ? undefined : data.obsSkipNotes ?? undefined,
       },
     });
   });
@@ -604,6 +638,11 @@ export async function getVisitHistory(regionFilter?: string | null) {
     date: v.plannedStartDateTime,
     notes: v.reason,
     school: v.school,
+    mode: v.mode,
+    // Decimal doesn't survive the server/client boundary.
+    milesDriven: decimalToNumber(v.milesDriven),
+    returnMilesDriven: decimalToNumber(v.returnMilesDriven),
+    originLabel: v.originLabel,
     // Non-null only for rows outside the region being viewed, so the table can flag them.
     otherRegionName:
       effectiveRegionId !== undefined && v.school.regionId !== effectiveRegionId
@@ -612,28 +651,185 @@ export async function getVisitHistory(regionFilter?: string | null) {
   }));
 }
 
-export async function addManualVisit(schoolId: string, dateIso: string, notes: string) {
+/**
+ * Everything the Log Visit form can record. Same shape the Confirm Visit modal
+ * sends, minus the geofence — a visit typed in after the fact can't prove where
+ * the RM was standing, so it carries no location check.
+ */
+const manualVisitSchema = z.object({
+  mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
+  origin: originCoordsSchema.optional(),
+  notes: z.string().max(2000).optional(),
+  visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
+  principalNotes: z.string().max(2000).optional(),
+  hasInstrumentRequest: z.boolean().default(false),
+  instrumentRequestDetails: z.string().max(2000).optional(),
+  obsPlanningPrep: observationRatingSchema.optional(),
+  obsCultureManagement: observationRatingSchema.optional(),
+  obsInstructionMusicianship: observationRatingSchema.optional(),
+  obsEngagementEvidence: observationRatingSchema.optional(),
+  obsProfessionalismGrowth: observationRatingSchema.optional(),
+  obsNotes: z.string().max(2000).optional(),
+  obsSkipReason: observationSkipReasonSchema.optional(),
+  obsSkipNotes: z.string().max(2000).optional(),
+});
+
+export async function addManualVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
+
+  const parsed = manualVisitSchema.safeParse(formData ?? {});
+  if (!parsed.success) throw new Error(parsed.error.message);
+  const data = parsed.data;
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: { lat: true, lng: true },
+  });
+  if (!school) throw new Error("School not found");
 
   const date = new Date(dateIso);
   const plannedStart = new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
   );
   const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  const { dayStart, dayEnd } = dayRangeFor(plannedStart);
+
+  // Same rules as a planner-confirmed visit: chain from the previous stop that
+  // day, else the origin the form asked for, else the RM's saved home. Without
+  // this a manually-logged visit contributed nothing to the mileage report.
+  const isRemote = data.mode !== "IN_PERSON";
+  let milesDriven: number | null = null;
+  let originLabel: string | null = null;
+
+  if (!isRemote && school.lat != null && school.lng != null) {
+    const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
+    if (origin) {
+      originLabel = origin.label;
+      milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
+    }
+  }
+
+  const skippedObs = data.obsSkipReason != null;
+
   const visit = await prisma.visit.create({
     data: {
       schoolId,
       plannedStartDateTime: plannedStart,
       plannedEndDateTime: plannedEnd,
       status: "DONE",
-      reason: notes,
+      reason: data.notes?.trim() || "Manual logging",
       // Deliberately not region-checked: logging a visit to another region's school
       // is supported. Stamping the author is what keeps it in their own history.
       visitedById: user.id,
+      mode: data.mode,
+      milesDriven: milesDriven ?? undefined,
+      originLabel: originLabel ?? undefined,
+      visitedWith: data.visitedWith,
+      principalNotes: data.principalNotes ?? undefined,
+      hasInstrumentRequest: data.hasInstrumentRequest,
+      instrumentRequestDetails: data.instrumentRequestDetails ?? undefined,
+      // A remote visit has no classroom, and a skipped observation carries a
+      // reason instead of ratings — never both.
+      obsPlanningPrep: isRemote || skippedObs ? undefined : data.obsPlanningPrep,
+      obsCultureManagement: isRemote || skippedObs ? undefined : data.obsCultureManagement,
+      obsInstructionMusicianship: isRemote || skippedObs ? undefined : data.obsInstructionMusicianship,
+      obsEngagementEvidence: isRemote || skippedObs ? undefined : data.obsEngagementEvidence,
+      obsProfessionalismGrowth: isRemote || skippedObs ? undefined : data.obsProfessionalismGrowth,
+      obsNotes: isRemote || skippedObs ? undefined : data.obsNotes ?? undefined,
+      obsSkipReason: isRemote ? undefined : data.obsSkipReason,
+      obsSkipNotes: isRemote ? undefined : data.obsSkipNotes ?? undefined,
     },
   });
   return serializeVisit(visit);
+}
+
+/**
+ * Books the drive home at the end of a day's visits.
+ *
+ * The per-visit legs only ever measured the trip *toward* a school, so the
+ * final drive back — routinely the longest single leg of the day — went
+ * unbilled. It is stored on the day's last visit rather than as a row of its
+ * own, which keeps the mileage report a single query and makes a second call
+ * for the same day an update instead of a duplicate.
+ *
+ * Returns null when the day has no in-person visit to close, or when the RM
+ * has no saved home and supplied no destination.
+ */
+export async function closeMyDay(
+  dateIso: string,
+  destination?: { lat: number; lng: number; label?: string }
+) {
+  const session = await auth();
+  const user = requireUser(session);
+  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
+
+  const last = await prisma.visit.findFirst({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      mode: "IN_PERSON",
+      plannedStartDateTime: { gte: dayStart, lte: dayEnd },
+    },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, school: { select: { name: true, lat: true, lng: true } } },
+  });
+  if (!last?.school.lat || !last.school.lng) return null;
+
+  let end = destination;
+  if (!end) {
+    const home = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { homeLat: true, homeLng: true },
+    });
+    if (home?.homeLat == null || home.homeLng == null) return null;
+    end = { lat: home.homeLat, lng: home.homeLng, label: "Home" };
+  }
+
+  const miles = await computeLegMiles(
+    { lat: last.school.lat, lng: last.school.lng },
+    { lat: end.lat, lng: end.lng }
+  );
+  if (miles == null) return null;
+
+  const updated = await prisma.visit.update({
+    where: { id: last.id },
+    data: { returnMilesDriven: miles, returnLabel: end.label ?? "Home" },
+  });
+
+  return {
+    fromSchool: last.school.name,
+    toLabel: end.label ?? "Home",
+    returnMiles: decimalToNumber(updated.returnMilesDriven),
+  };
+}
+
+/** Whether the RM's day is already closed, for the button's state. */
+export async function getMyDayStatus(dateIso: string) {
+  const session = await auth();
+  const user = requireUser(session);
+  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
+
+  const visits = await prisma.visit.findMany({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      plannedStartDateTime: { gte: dayStart, lte: dayEnd },
+    },
+    select: { milesDriven: true, returnMilesDriven: true, mode: true },
+  });
+
+  const outbound = visits.reduce((sum, v) => sum + (decimalToNumber(v.milesDriven) ?? 0), 0);
+  const ret = visits.reduce((sum, v) => sum + (decimalToNumber(v.returnMilesDriven) ?? 0), 0);
+
+  return {
+    visitCount: visits.length,
+    inPersonCount: visits.filter((v) => v.mode === "IN_PERSON").length,
+    outboundMiles: outbound,
+    returnMiles: ret,
+    totalMiles: outbound + ret,
+    closed: ret > 0,
+  };
 }
 
 export async function deleteVisitLog(id: string) {
@@ -853,6 +1049,75 @@ export async function getOptimalRouteForDay(
 }
 
 // ─── Home location (per-user, used for mileage/route origin) ────────────────
+
+/**
+ * Regional managers a report can be filtered down to.
+ *
+ * An RM sees the others in their own region (they cover for each other and
+ * need to reconcile shared days); admins see everyone. Anyone else gets only
+ * themselves, so the picker can never become a directory of other people's
+ * mileage.
+ */
+export async function getReportableUsers() {
+  const session = await auth();
+  const user = requireUser(session);
+
+  if (user.role !== "ADMIN" && user.role !== "REGIONAL_MANAGER") {
+    const me = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { id: true, name: true, email: true },
+    });
+    return me ? [me] : [];
+  }
+
+  return await prisma.user.findMany({
+    where: user.role === "ADMIN" ? {} : { regionId: user.regionId ?? undefined },
+    select: { id: true, name: true, email: true },
+    orderBy: [{ name: "asc" }, { email: "asc" }],
+  });
+}
+
+/** On-screen mileage report. Same data the CSV/PDF download renders. */
+export async function getMileageReport(params: {
+  preset: RangePreset;
+  quarterKey?: string | null;
+  start?: string | null;
+  end?: string | null;
+  regionId?: string | null;
+  userId?: string | null;
+}) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const regionId = user.role === "ADMIN" ? params.regionId ?? undefined : scopeToRegion(user);
+  const canSeeOthers = user.role === "ADMIN" || user.role === "REGIONAL_MANAGER";
+  const visitedById = canSeeOthers ? params.userId ?? undefined : user.id;
+
+  const range = await resolveRange(prisma, params.preset, {
+    quarterKey: params.quarterKey,
+    start: params.start,
+    end: params.end,
+  });
+
+  const data = await getMileageReportData(prisma, {
+    startDate: range.startDate,
+    endDate: range.endDate,
+    label: range.label,
+    regionId,
+    visitedById,
+  });
+
+  // Dates cross to the client fine; the Decimals were already converted upstream.
+  return {
+    ...data,
+    period: {
+      label: data.period.label,
+      startDate: data.period.startDate.toISOString(),
+      endDate: data.period.endDate.toISOString(),
+    },
+    visits: data.visits.map((v) => ({ ...v, date: v.date.toISOString() })),
+  };
+}
 
 export async function getQuarters() {
   return await prisma.quarter.findMany({ orderBy: { startDate: "asc" } });

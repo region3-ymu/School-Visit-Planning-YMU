@@ -1,13 +1,39 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools, deleteVisitLog, editVisitLog, getQuarters } from "@/app/actions";
-import { format } from "date-fns";
-import { History, Plus, CheckCircle, Database, Edit2, Trash2, Download } from "lucide-react";
+import {
+    getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
+    deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
+    closeMyDay, getMyDayStatus,
+} from "@/app/actions";
+import { format, isToday } from "date-fns";
+import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, Loader2 } from "lucide-react";
+import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
+import TeacherObservationFields, {
+    EMPTY_OBSERVATIONS,
+    type ObservationDomainKey,
+    type ObservationRating,
+    type ObservationSkipReason,
+    type ObservationState,
+} from "./visit/TeacherObservationFields";
+
+const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
+    { value: "PRINCIPAL", label: "Principal" },
+    { value: "MAIN_OFFICE", label: "Main Office" },
+    { value: "INSCHOOL_MUSIC_TEACHER", label: "In-school music teacher" },
+    { value: "YMU_TEACHER", label: "YMU teacher" },
+];
+
+const TALK_ABOUT_TRIGGERS = ["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER"];
+
+// Derived from the server actions so the columns below can't drift from what
+// the query actually selects.
+type VisitLogRow = Awaited<ReturnType<typeof getVisitHistory>>[number];
+type SchoolOption = Awaited<ReturnType<typeof getSchools>>[number];
 
 export default function VisitHistory({ regionFilter }: { regionFilter?: string | null }) {
-    const [history, setHistory] = useState<any[]>([]);
-    const [schools, setSchools] = useState<any[]>([]);
+    const [history, setHistory] = useState<VisitLogRow[]>([]);
+    const [schools, setSchools] = useState<SchoolOption[]>([]);
     const [otherSchools, setOtherSchools] = useState<{ id: string; name: string; regionName: string }[]>([]);
     const [loading, setLoading] = useState(true);
     const [filterMonth, setFilterMonth] = useState<string>(new Date().getMonth().toString());
@@ -22,6 +48,29 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [selectedSchool, setSelectedSchool] = useState("");
     const [visitDate, setVisitDate] = useState(format(new Date(), "yyyy-MM-dd"));
     const [notes, setNotes] = useState("");
+
+    const [mode, setMode] = useState<"IN_PERSON" | "ONLINE" | "PHONE">("IN_PERSON");
+    const [originMode, setOriginMode] = useState<OriginMode>("home");
+    const [homeAddress, setHomeAddress] = useState("");
+    const [savedHome, setSavedHome] = useState<{ address: string; lat: number; lng: number } | null>(null);
+    const [homeSaveStatus, setHomeSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
+    const [customAddress, setCustomAddress] = useState("");
+    const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+    const [gpsError, setGpsError] = useState<string | null>(null);
+    const [gpsLoading, setGpsLoading] = useState(false);
+
+    const [visitedWith, setVisitedWith] = useState<string[]>([]);
+    const [principalNotes, setPrincipalNotes] = useState("");
+    const [hasInstrumentRequest, setHasInstrumentRequest] = useState(false);
+    const [instrumentRequestDetails, setInstrumentRequestDetails] = useState("");
+    const [observations, setObservations] = useState<ObservationState>(EMPTY_OBSERVATIONS);
+    const [obsNotes, setObsNotes] = useState("");
+    const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
+    const [obsSkipNotes, setObsSkipNotes] = useState("");
+    const [formError, setFormError] = useState<string | null>(null);
+
+    const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
+    const [closingDay, setClosingDay] = useState(false);
 
     const fetchHistory = async () => {
         setLoading(true);
@@ -47,11 +96,31 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         // Keyed off the signed-in user's own region, not the admin regionFilter, so
         // this only needs to run once. Empty for admins, who already see every school.
         getOtherRegionSchools().then(setOtherSchools);
+        getMyHomeLocation().then((home) => {
+            if (home) {
+                setSavedHome(home);
+                setHomeAddress(home.address);
+            }
+        });
+        getMyDayStatus(new Date().toISOString()).then(setDayStatus);
     }, []);
 
     // Which of the two pickers owns the current selection — derived, so editing an
     // existing log lights up the right one without extra state to keep in sync.
     const isOtherRegionPick = otherSchools.some(s => s.id === selectedSchool);
+
+    const isRemote = mode !== "IN_PERSON";
+    const showTalkAbout = visitedWith.some((v) => TALK_ABOUT_TRIGGERS.includes(v));
+    const showTeacherObservation = !isRemote && visitedWith.includes("YMU_TEACHER");
+    // A past date can't use "where I am now" as the origin — today's position says
+    // nothing about where the RM drove from last Tuesday.
+    const allowGps = isToday(new Date(visitDate + "T12:00:00"));
+
+    const toggleVisitedWith = (value: string) =>
+        setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+
+    const setObservation = (key: ObservationDomainKey, value: ObservationRating) =>
+        setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
 
     const otherSchoolsByRegion = otherSchools.reduce<Record<string, typeof otherSchools>>((acc, s) => {
         (acc[s.regionName] ||= []).push(s);
@@ -66,16 +135,77 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         return `/api/reports/mileage?${params.toString()}`;
     })();
 
+    const resetForm = () => {
+        setSelectedSchool("");
+        setNotes("");
+        setMode("IN_PERSON");
+        setOriginMode("home");
+        setCustomAddress("");
+        setVisitedWith([]);
+        setPrincipalNotes("");
+        setHasInstrumentRequest(false);
+        setInstrumentRequestDetails("");
+        setObservations(EMPTY_OBSERVATIONS);
+        setObsNotes("");
+        setObsSkipReason(null);
+        setObsSkipNotes("");
+        setFormError(null);
+    };
+
     const handleOpenAdd = () => {
         setEditingId(null);
-        setSelectedSchool("");
+        resetForm();
         setVisitDate(format(new Date(), "yyyy-MM-dd"));
-        setNotes("");
         setShowModal(true);
     };
 
-    const handleOpenEdit = (log: any) => {
+    const requestGps = () => {
+        if (!navigator.geolocation) {
+            setGpsError("Geolocation is not supported by this browser");
+            return;
+        }
+        setGpsLoading(true);
+        setGpsError(null);
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                setGpsLoading(false);
+            },
+            (err) => {
+                setGpsError(err.message || "Could not get your location");
+                setGpsLoading(false);
+            },
+            { enableHighAccuracy: true, timeout: 15000 }
+        );
+    };
+
+    const handleSaveHome = async () => {
+        if (!homeAddress.trim()) return;
+        setHomeSaveStatus("saving");
+        try {
+            const saved = await setMyHomeLocation(homeAddress);
+            setSavedHome(saved);
+            setHomeAddress(saved.address);
+            setHomeSaveStatus("saved");
+        } catch {
+            setHomeSaveStatus("error");
+        }
+    };
+
+    const handleCloseDay = async () => {
+        setClosingDay(true);
+        try {
+            await closeMyDay(new Date().toISOString());
+            setDayStatus(await getMyDayStatus(new Date().toISOString()));
+            await fetchHistory();
+        } finally {
+            setClosingDay(false);
+        }
+    };
+
+    const handleOpenEdit = (log: VisitLogRow) => {
         setEditingId(log.id);
+        resetForm();
         setSelectedSchool(log.schoolId);
         setVisitDate(format(new Date(log.date), "yyyy-MM-dd"));
         setNotes(log.notes || "");
@@ -91,19 +221,72 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
     const handleSave = async () => {
         if (!selectedSchool || !visitDate) return;
+        setFormError(null);
+
+        if (hasInstrumentRequest && !instrumentRequestDetails.trim()) {
+            setFormError("Please describe the instrument request or repair needed.");
+            return;
+        }
+
         setLoading(true);
         const isoDate = new Date(visitDate + "T12:00:00Z").toISOString();
 
-        if (editingId) {
-            await editVisitLog(editingId, isoDate, notes);
-        } else {
-            await addManualVisit(selectedSchool, isoDate, notes || "Manual logging");
+        try {
+            if (editingId) {
+                await editVisitLog(editingId, isoDate, notes);
+            } else {
+                // Only the first in-person visit of the day needs an origin; the server
+                // chains later ones from the previous stop and ignores what we send.
+                let origin: { lat: number; lng: number; label?: string } | undefined;
+                if (!isRemote) {
+                    if (originMode === "gps") {
+                        if (!gpsCoords) throw new Error("Still waiting on your location — pick Home or Other address instead.");
+                        origin = { ...gpsCoords, label: "Current location" };
+                    } else if (originMode === "home" && savedHome && homeAddress.trim() === savedHome.address) {
+                        origin = { lat: savedHome.lat, lng: savedHome.lng, label: "Home" };
+                    } else {
+                        const address = originMode === "home" ? homeAddress.trim() : customAddress.trim();
+                        if (address) {
+                            const res = await fetch("/api/routing/geocode", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ address }),
+                            });
+                            const geo = await res.json();
+                            if (!res.ok) throw new Error(geo.error ?? "Could not find that address");
+                            origin = { lat: geo.lat, lng: geo.lng, label: originMode === "home" ? "Home" : geo.label };
+                        }
+                    }
+                }
+
+                await addManualVisit(selectedSchool, isoDate, {
+                    mode,
+                    origin,
+                    notes: notes.trim() || undefined,
+                    visitedWith,
+                    principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
+                    hasInstrumentRequest,
+                    instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
+                    obsPlanningPrep: observations.obsPlanningPrep ?? undefined,
+                    obsCultureManagement: observations.obsCultureManagement ?? undefined,
+                    obsInstructionMusicianship: observations.obsInstructionMusicianship ?? undefined,
+                    obsEngagementEvidence: observations.obsEngagementEvidence ?? undefined,
+                    obsProfessionalismGrowth: observations.obsProfessionalismGrowth ?? undefined,
+                    obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() || undefined : undefined,
+                    obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
+                    obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
+                });
+            }
+        } catch (err) {
+            setFormError(err instanceof Error ? err.message : "Failed to save the visit");
+            setLoading(false);
+            return;
         }
 
         setShowModal(false);
         setEditingId(null);
-        setSelectedSchool("");
-        setNotes("");
+        resetForm();
+        setDayStatus(await getMyDayStatus(new Date().toISOString()));
         await fetchHistory();
     };
 
@@ -184,6 +367,40 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                 </div>
             </div>
 
+            {dayStatus && dayStatus.inPersonCount > 0 && (
+                <div className="mb-4 rounded-xl border border-gray-100 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                        <Car size={18} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <div className="text-sm">
+                            <p className="font-medium text-gray-800 dark:text-gray-100">
+                                Today: {dayStatus.visitCount} visit{dayStatus.visitCount === 1 ? "" : "s"},{" "}
+                                {dayStatus.totalMiles.toFixed(1)} miles
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {dayStatus.closed
+                                    ? `${dayStatus.outboundMiles.toFixed(1)} out + ${dayStatus.returnMiles.toFixed(1)} back home`
+                                    : "The drive home isn't counted yet."}
+                            </p>
+                        </div>
+                    </div>
+                    {dayStatus.closed ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 px-3 py-2">
+                            <CheckCircle size={14} /> Day closed
+                        </span>
+                    ) : (
+                        <button
+                            onClick={handleCloseDay}
+                            disabled={closingDay}
+                            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                            title="Adds the drive from your last school back home"
+                        >
+                            {closingDay && <Loader2 size={14} className="animate-spin" />}
+                            End my day
+                        </button>
+                    )}
+                </div>
+            )}
+
             {loading ? (
                 <div className="text-center py-12 text-gray-500">Loading history...</div>
             ) : (
@@ -194,6 +411,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                 <tr>
                                     <th className="px-6 py-4 font-semibold">Date</th>
                                     <th className="px-6 py-4 font-semibold">School</th>
+                                    <th className="px-6 py-4 font-semibold">Miles</th>
                                     <th className="px-6 py-4 font-semibold">Notes / Reason</th>
                                     <th className="px-6 py-4 font-semibold">Status</th>
                                     <th className="px-6 py-4 font-semibold text-right">Actions</th>
@@ -202,7 +420,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             <tbody className="divide-y divide-gray-100 dark:divide-zinc-800">
                                 {filteredHistory.length === 0 ? (
                                     <tr>
-                                        <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                                        <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                                             No visit history found for this period.
                                         </td>
                                     </tr>
@@ -217,6 +435,18 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 {log.otherRegionName && (
                                                     <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-xs font-semibold align-middle">
                                                         {log.otherRegionName}
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className="px-6 py-4 whitespace-nowrap text-gray-700 dark:text-gray-300">
+                                                {log.milesDriven == null && log.returnMilesDriven == null ? (
+                                                    <span className="text-gray-400">—</span>
+                                                ) : (
+                                                    <span title={log.originLabel ? `From ${log.originLabel}` : undefined}>
+                                                        {((log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)).toFixed(1)}
+                                                        {log.returnMilesDriven != null && (
+                                                            <span className="text-xs text-gray-400 ml-1">incl. return</span>
+                                                        )}
                                                     </span>
                                                 )}
                                             </td>
@@ -248,14 +478,14 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             {/* Manual Log Modal */}
             {showModal && (
                 <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4">
-                    <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800">
-                        <div className="p-6 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center">
+                    <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800 max-h-[90vh] flex flex-col">
+                        <div className="p-6 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center shrink-0">
                             <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100">
                                 {editingId ? "Edit Visit Log" : "Log Manual Visit"}
                             </h3>
                             <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">✕</button>
                         </div>
-                        <div className="p-6 space-y-4">
+                        <div className="p-6 space-y-4 overflow-y-auto">
                             <div className={otherSchools.length > 0 ? "grid grid-cols-1 sm:grid-cols-2 gap-3" : ""}>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">School</label>
@@ -316,8 +546,137 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100"
                                 />
                             </div>
+
+                            {/* Editing only ever changed the date and the note, so the rest of
+                                the form stays out of the way in that mode. */}
+                            {!editingId && (
+                                <>
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">How did this visit happen?</p>
+                                        <div className="flex gap-2">
+                                            {([
+                                                { value: "IN_PERSON", label: "In person" },
+                                                { value: "ONLINE", label: "Online" },
+                                                { value: "PHONE", label: "Phone call" },
+                                            ] as const).map((opt) => (
+                                                <button
+                                                    key={opt.value}
+                                                    type="button"
+                                                    onClick={() => setMode(opt.value)}
+                                                    className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                                                        mode === opt.value
+                                                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-700 dark:text-indigo-300"
+                                                            : "border-gray-200 dark:border-zinc-700 text-gray-600 dark:text-gray-400"
+                                                    }`}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {isRemote && (
+                                            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                                                No mileage for this visit, since you didn&apos;t travel.
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {!isRemote && (
+                                        <div>
+                                            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                                Where did you drive from?
+                                            </p>
+                                            <OriginPicker
+                                                mode={originMode}
+                                                onModeChange={setOriginMode}
+                                                homeAddress={homeAddress}
+                                                onHomeAddressChange={(v) => { setHomeAddress(v); setHomeSaveStatus("idle"); }}
+                                                onSaveHome={handleSaveHome}
+                                                homeSaveStatus={homeSaveStatus}
+                                                customAddress={customAddress}
+                                                onCustomAddressChange={setCustomAddress}
+                                                gpsCoords={gpsCoords}
+                                                gpsError={gpsError}
+                                                gpsLoading={gpsLoading}
+                                                onRequestGps={requestGps}
+                                                allowGps={allowGps}
+                                            />
+                                            <p className="text-xs text-gray-400 mt-1">
+                                                Only used if this is your first visit that day — later ones chain from the
+                                                previous school automatically.
+                                            </p>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Who did you visit?</p>
+                                        <div className="grid grid-cols-2 gap-2">
+                                            {VISITED_WITH_OPTIONS.map((opt) => (
+                                                <label
+                                                    key={opt.value}
+                                                    className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 cursor-pointer text-gray-700 dark:text-gray-300"
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={visitedWith.includes(opt.value)}
+                                                        onChange={() => toggleVisitedWith(opt.value)}
+                                                    />
+                                                    {opt.label}
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {showTalkAbout && (
+                                        <div>
+                                            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">What did you talk about?</p>
+                                            <textarea
+                                                placeholder="Events? Concerts? (school&apos;s or YMU&apos;s?) Dates?"
+                                                value={principalNotes}
+                                                onChange={(e) => setPrincipalNotes(e.target.value)}
+                                                rows={2}
+                                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+                                            />
+                                        </div>
+                                    )}
+
+                                    {showTeacherObservation && (
+                                        <TeacherObservationFields
+                                            observations={observations}
+                                            onObservationChange={setObservation}
+                                            notes={obsNotes}
+                                            onNotesChange={setObsNotes}
+                                            skipReason={obsSkipReason}
+                                            onSkipReasonChange={setObsSkipReason}
+                                            skipNotes={obsSkipNotes}
+                                            onSkipNotesChange={setObsSkipNotes}
+                                        />
+                                    )}
+
+                                    <div>
+                                        <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={hasInstrumentRequest}
+                                                onChange={(e) => setHasInstrumentRequest(e.target.checked)}
+                                            />
+                                            There&apos;s an instrument request or repair needed
+                                        </label>
+                                        {hasInstrumentRequest && (
+                                            <textarea
+                                                placeholder="Details (instrument, quantity, issue)"
+                                                value={instrumentRequestDetails}
+                                                onChange={(e) => setInstrumentRequestDetails(e.target.value)}
+                                                rows={2}
+                                                className="w-full mt-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+                                            />
+                                        )}
+                                    </div>
+                                </>
+                            )}
+
+                            {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
                         </div>
-                        <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 flex justify-end space-x-3">
+                        <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 flex justify-end space-x-3 shrink-0">
                             <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg transition-colors">Cancel</button>
                             <button onClick={handleSave} disabled={loading || !selectedSchool || !visitDate} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
                                 {editingId ? "Save Changes" : "Save Record"}

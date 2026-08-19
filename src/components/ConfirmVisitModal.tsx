@@ -4,8 +4,15 @@ import { useEffect, useState } from "react";
 import { X, MapPin, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation } from "@/app/actions";
 import { haversineMeters } from "@/lib/geo";
+import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
+import TeacherObservationFields, {
+  EMPTY_OBSERVATIONS,
+  type ObservationDomainKey,
+  type ObservationRating,
+  type ObservationSkipReason,
+  type ObservationState,
+} from "./visit/TeacherObservationFields";
 
-type OriginMode = "home" | "custom";
 type ChainState =
   | { status: "loading" }
   | { status: "chained"; label: string }
@@ -18,29 +25,6 @@ const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
   { value: "MAIN_OFFICE", label: "Main Office" },
   { value: "INSCHOOL_MUSIC_TEACHER", label: "In-school music teacher" },
   { value: "YMU_TEACHER", label: "YMU teacher" },
-];
-
-type ObservationRating = "NEEDS_SUPPORT" | "DEVELOPING" | "MEETS" | "EXCEEDS";
-type ObservationDomainKey =
-  | "obsPlanningPrep"
-  | "obsCultureManagement"
-  | "obsInstructionMusicianship"
-  | "obsEngagementEvidence"
-  | "obsProfessionalismGrowth";
-
-const RATING_OPTIONS: { value: ObservationRating; label: string }[] = [
-  { value: "NEEDS_SUPPORT", label: "Needs support" },
-  { value: "DEVELOPING", label: "Developing" },
-  { value: "MEETS", label: "Meets" },
-  { value: "EXCEEDS", label: "Exceeds" },
-];
-
-const OBSERVATION_DOMAINS: { key: ObservationDomainKey; title: string; hint: string }[] = [
-  { key: "obsPlanningPrep", title: "Planning & preparation", hint: "Objectives, materials, pacing" },
-  { key: "obsCultureManagement", title: "Culture & management", hint: "Routines, relationships, transitions" },
-  { key: "obsInstructionMusicianship", title: "Instruction & musicianship", hint: "Modeling, feedback, skill building" },
-  { key: "obsEngagementEvidence", title: "Engagement & learning evidence", hint: "Participation, ownership, output" },
-  { key: "obsProfessionalismGrowth", title: "Professionalism & growth", hint: "Communication, reliability, reflection" },
 ];
 
 const TALK_ABOUT_TRIGGERS = ["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER"];
@@ -83,19 +67,19 @@ export default function ConfirmVisitModal({
   const [savedHomeAddress, setSavedHomeAddress] = useState<{ address: string; lat: number; lng: number } | null>(null);
   const [homeSaveStatus, setHomeSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [customAddress, setCustomAddress] = useState("");
+  // The geofence check below already asks the browser for a fix; reusing it as a
+  // possible mileage origin means the RM is never prompted for GPS twice.
+  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
 
   const [visitedWith, setVisitedWith] = useState<string[]>([]);
   const [principalNotes, setPrincipalNotes] = useState("");
   const [hasInstrumentRequest, setHasInstrumentRequest] = useState(false);
   const [instrumentRequestDetails, setInstrumentRequestDetails] = useState("");
-  const [observations, setObservations] = useState<Record<ObservationDomainKey, ObservationRating | null>>({
-    obsPlanningPrep: null,
-    obsCultureManagement: null,
-    obsInstructionMusicianship: null,
-    obsEngagementEvidence: null,
-    obsProfessionalismGrowth: null,
-  });
+  const [observations, setObservations] = useState<ObservationState>(EMPTY_OBSERVATIONS);
   const [obsNotes, setObsNotes] = useState("");
+  const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
+  const [obsSkipNotes, setObsSkipNotes] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -108,6 +92,7 @@ export default function ConfirmVisitModal({
     }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         if (schoolLat == null || schoolLng == null) {
           setGeofenceStatus("no-target");
           return;
@@ -119,6 +104,7 @@ export default function ConfirmVisitModal({
       (err) => {
         setGeofenceStatus("error");
         setGeofenceError(err.message || "Could not get GPS location");
+        setGpsError(err.message || "Could not get GPS location");
       },
       { enableHighAccuracy: true, timeout: 15000 }
     );
@@ -150,11 +136,17 @@ export default function ConfirmVisitModal({
     }
   };
 
+  const hasOrigin =
+    originMode === "home"
+      ? !!homeAddress.trim()
+      : originMode === "gps"
+        ? !!gpsCoords
+        : !!customAddress.trim();
+
   const canConfirm =
     isRemote ||
     ((geofenceStatus === "ok" || overrideGeofence) &&
-      (chainState.status !== "needs-input" ||
-        (originMode === "home" ? !!homeAddress.trim() : !!customAddress.trim())));
+      (chainState.status !== "needs-input" || hasOrigin));
 
   const toggleVisitedWith = (value: string) => {
     setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -162,6 +154,7 @@ export default function ConfirmVisitModal({
 
   const showTalkAbout = visitedWith.some((v) => TALK_ABOUT_TRIGGERS.includes(v));
   const showTeacherObservation = !isRemote && visitedWith.includes("YMU_TEACHER");
+  const skippedObs = showTeacherObservation && obsSkipReason !== null;
 
   const setObservation = (key: ObservationDomainKey, value: ObservationRating) => {
     setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
@@ -180,7 +173,10 @@ export default function ConfirmVisitModal({
       let origin: { lat: number; lng: number; label?: string } | undefined;
 
       if (!isRemote && chainState.status === "needs-input") {
-        if (originMode === "home" && savedHomeAddress && homeAddress.trim() === savedHomeAddress.address) {
+        if (originMode === "gps") {
+          if (!gpsCoords) throw new Error("Still waiting on your location — pick Home or Other address instead.");
+          origin = { ...gpsCoords, label: "Current location" };
+        } else if (originMode === "home" && savedHomeAddress && homeAddress.trim() === savedHomeAddress.address) {
           origin = { lat: savedHomeAddress.lat, lng: savedHomeAddress.lng, label: "Home" };
         } else {
           const addressToGeocode = originMode === "home" ? homeAddress.trim() : customAddress.trim();
@@ -204,12 +200,15 @@ export default function ConfirmVisitModal({
         instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
         geofenceDistanceM: isRemote ? undefined : geofenceDistanceM ?? undefined,
         geofenceOverridden: isRemote ? false : geofenceStatus !== "ok",
-        obsPlanningPrep: observations.obsPlanningPrep ?? undefined,
-        obsCultureManagement: observations.obsCultureManagement ?? undefined,
-        obsInstructionMusicianship: observations.obsInstructionMusicianship ?? undefined,
-        obsEngagementEvidence: observations.obsEngagementEvidence ?? undefined,
-        obsProfessionalismGrowth: observations.obsProfessionalismGrowth ?? undefined,
-        obsNotes: showTeacherObservation ? obsNotes.trim() || undefined : undefined,
+        // A skipped observation carries a reason instead of ratings, never both.
+        obsPlanningPrep: skippedObs ? undefined : observations.obsPlanningPrep ?? undefined,
+        obsCultureManagement: skippedObs ? undefined : observations.obsCultureManagement ?? undefined,
+        obsInstructionMusicianship: skippedObs ? undefined : observations.obsInstructionMusicianship ?? undefined,
+        obsEngagementEvidence: skippedObs ? undefined : observations.obsEngagementEvidence ?? undefined,
+        obsProfessionalismGrowth: skippedObs ? undefined : observations.obsProfessionalismGrowth ?? undefined,
+        obsNotes: showTeacherObservation && !skippedObs ? obsNotes.trim() || undefined : undefined,
+        obsSkipReason: skippedObs ? obsSkipReason ?? undefined : undefined,
+        obsSkipNotes: skippedObs ? obsSkipNotes.trim() || undefined : undefined,
       });
 
       onConfirmed();
@@ -331,65 +330,24 @@ export default function ConfirmVisitModal({
               <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
                 First visit of the day — starting from?
               </p>
-              <div className="flex gap-2 mb-2">
-                {(
-                  [
-                    { mode: "home" as const, label: "Home" },
-                    { mode: "custom" as const, label: "Custom address" },
-                  ] as const
-                ).map(({ mode, label }) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setOriginMode(mode)}
-                    className={`flex-1 px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                      originMode === mode
-                        ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300"
-                        : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {originMode === "home" && (
-                <div>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Your home address"
-                      value={homeAddress}
-                      onChange={(e) => {
-                        setHomeAddress(e.target.value);
-                        setHomeSaveStatus("idle");
-                      }}
-                      className="flex-1 px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleSaveHomeAddress}
-                      disabled={homeSaveStatus === "saving" || !homeAddress.trim()}
-                      className="px-3 py-2 rounded-lg border border-indigo-200 dark:border-indigo-900 text-indigo-700 dark:text-indigo-300 text-sm font-medium disabled:opacity-50"
-                    >
-                      {homeSaveStatus === "saving" ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                  <p className="text-xs mt-1 text-gray-400">
-                    Saving updates your profile for next time.
-                    {homeSaveStatus === "saved" && <span className="text-emerald-600 ml-1">Saved.</span>}
-                    {homeSaveStatus === "error" && <span className="text-red-600 ml-1">Failed to save.</span>}
-                  </p>
-                </div>
-              )}
-              {originMode === "custom" && (
-                <input
-                  type="text"
-                  placeholder="Enter address"
-                  value={customAddress}
-                  onChange={(e) => setCustomAddress(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-                />
-              )}
+              <OriginPicker
+                mode={originMode}
+                onModeChange={setOriginMode}
+                homeAddress={homeAddress}
+                onHomeAddressChange={(v) => {
+                  setHomeAddress(v);
+                  setHomeSaveStatus("idle");
+                }}
+                onSaveHome={handleSaveHomeAddress}
+                homeSaveStatus={homeSaveStatus}
+                customAddress={customAddress}
+                onCustomAddressChange={setCustomAddress}
+                gpsCoords={gpsCoords}
+                gpsError={gpsError}
+                gpsLoading={geofenceStatus === "checking" && !gpsCoords && !gpsError}
+                onRequestGps={() => {}}
+                allowGps
+              />
             </div>
           )}
 
@@ -429,46 +387,16 @@ export default function ConfirmVisitModal({
 
           {/* Teacher observation — YMU teacher */}
           {showTeacherObservation && (
-            <div>
-              <p className="text-sm font-semibold text-gray-800 dark:text-gray-100">Teacher observation</p>
-              <p className="text-xs text-gray-400 mb-3">Skip a domain if you didn&apos;t see it this visit.</p>
-              <div className="space-y-3">
-                {OBSERVATION_DOMAINS.map((domain) => (
-                  <div key={domain.key}>
-                    <div className="flex justify-between items-baseline mb-1 gap-2">
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{domain.title}</span>
-                      <span className="text-[11px] text-gray-400 text-right shrink-0">{domain.hint}</span>
-                    </div>
-                    <div className="grid grid-cols-4 gap-1.5">
-                      {RATING_OPTIONS.map((opt) => (
-                        <button
-                          key={opt.value}
-                          type="button"
-                          onClick={() => setObservation(domain.key, opt.value)}
-                          className={`px-2 py-2 rounded-lg border text-xs font-medium transition-colors ${
-                            observations[domain.key] === opt.value
-                              ? "border-indigo-600 bg-indigo-600 text-white"
-                              : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-3">
-                <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Your notes and evidence</p>
-                <textarea
-                  placeholder="What did you see or hear that supports these ratings?"
-                  value={obsNotes}
-                  onChange={(e) => setObsNotes(e.target.value)}
-                  rows={3}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
-                />
-              </div>
-            </div>
+            <TeacherObservationFields
+              observations={observations}
+              onObservationChange={setObservation}
+              notes={obsNotes}
+              onNotesChange={setObsNotes}
+              skipReason={obsSkipReason}
+              onSkipReasonChange={setObsSkipReason}
+              skipNotes={obsSkipNotes}
+              onSkipNotesChange={setObsSkipNotes}
+            />
           )}
 
           {/* Instrument request */}

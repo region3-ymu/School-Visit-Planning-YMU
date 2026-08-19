@@ -38,18 +38,21 @@ function Table({ headers, rows }: { headers: string[]; rows: string[][] }) {
 }
 
 function MileageReportDocument({ data, regionLabel }: { data: MileageReportData; regionLabel?: string }) {
-  const { quarter, totalMiles, byRM, bySchool } = data;
+  const { period, totalMiles, outboundMiles, returnMiles, byRM, bySchool } = data;
 
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <Text style={styles.title}>Mileage Report</Text>
         <Text style={styles.subtitle}>
-          {quarter.schoolYear} — {quarter.label} ({quarter.startDate.toISOString().slice(0, 10)} to{" "}
-          {quarter.endDate.toISOString().slice(0, 10)})
+          {period.label} ({period.startDate.toISOString().slice(0, 10)} to{" "}
+          {period.endDate.toISOString().slice(0, 10)})
         </Text>
         {regionLabel && <Text style={styles.subtitle}>Region: {regionLabel}</Text>}
         <Text style={styles.total}>Total miles driven: {totalMiles.toFixed(1)}</Text>
+        <Text style={styles.subtitle}>
+          {outboundMiles.toFixed(1)} to schools + {returnMiles.toFixed(1)} returning home
+        </Text>
 
         <Text style={styles.sectionTitle}>By Regional Manager</Text>
         <Table
