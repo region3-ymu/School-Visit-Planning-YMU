@@ -67,6 +67,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [obsNotes, setObsNotes] = useState("");
     const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
     const [obsSkipNotes, setObsSkipNotes] = useState("");
+    const [isLastStop, setIsLastStop] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
 
     const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
@@ -149,6 +150,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setObsNotes("");
         setObsSkipReason(null);
         setObsSkipNotes("");
+        setIsLastStop(false);
         setFormError(null);
     };
 
@@ -276,6 +278,13 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
                 });
+
+                // Books the drive home for the day being logged, which is not
+                // necessarily today — the "End my day" button only ever closes
+                // today, so back-filling a past day depends on this.
+                if (isLastStop && !isRemote) {
+                    await closeMyDay(isoDate);
+                }
             }
         } catch (err) {
             setFormError(err instanceof Error ? err.message : "Failed to save the visit");
@@ -671,6 +680,23 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                             />
                                         )}
                                     </div>
+
+                                    {!isRemote && (
+                                        <div className="rounded-lg border border-gray-200 dark:border-zinc-700 p-3">
+                                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isLastStop}
+                                                    onChange={(e) => setIsLastStop(e.target.checked)}
+                                                />
+                                                This was my last stop that day
+                                            </label>
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
+                                                Adds the drive from this school back home. Tick it on the last visit
+                                                when you&apos;re logging a whole day after the fact.
+                                            </p>
+                                        </div>
+                                    )}
                                 </>
                             )}
 

@@ -792,9 +792,23 @@ export async function closeMyDay(
   );
   if (miles == null) return null;
 
-  const updated = await prisma.visit.update({
-    where: { id: last.id },
-    data: { returnMilesDriven: miles, returnLabel: end.label ?? "Home" },
+  const updated = await prisma.$transaction(async (tx) => {
+    // A day has exactly one drive home. Clearing any leg booked earlier that
+    // day keeps a re-run — or a later visit that turns out to be the real last
+    // stop — from counting the return twice.
+    await tx.visit.updateMany({
+      where: {
+        visitedById: user.id,
+        plannedStartDateTime: { gte: dayStart, lte: dayEnd },
+        returnMilesDriven: { not: null },
+        id: { not: last.id },
+      },
+      data: { returnMilesDriven: null, returnLabel: null },
+    });
+    return tx.visit.update({
+      where: { id: last.id },
+      data: { returnMilesDriven: miles, returnLabel: end.label ?? "Home" },
+    });
   });
 
   return {
