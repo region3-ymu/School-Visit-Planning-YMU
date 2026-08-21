@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { X, MapPin, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
-import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation } from "@/app/actions";
+import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
 import { haversineMeters } from "@/lib/geo";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import TeacherObservationFields, {
@@ -71,6 +71,8 @@ export default function ConfirmVisitModal({
   // possible mileage origin means the RM is never prompted for GPS twice.
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
+  const [office, setOffice] = useState<Office | null>(null);
 
   const [visitedWith, setVisitedWith] = useState<string[]>([]);
   const [principalNotes, setPrincipalNotes] = useState("");
@@ -120,6 +122,7 @@ export default function ConfirmVisitModal({
         setHomeAddress(home.address);
       }
     });
+    getOfficeLocations().then((list) => setOffice(list[0] ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -141,7 +144,9 @@ export default function ConfirmVisitModal({
       ? !!homeAddress.trim()
       : originMode === "gps"
         ? !!gpsCoords
-        : !!customAddress.trim();
+        : originMode === "office"
+          ? !!office
+          : !!customAddress.trim();
 
   const canConfirm =
     isRemote ||
@@ -176,6 +181,9 @@ export default function ConfirmVisitModal({
         if (originMode === "gps") {
           if (!gpsCoords) throw new Error("Still waiting on your location — pick Home or Other address instead.");
           origin = { ...gpsCoords, label: "Current location" };
+        } else if (originMode === "office") {
+          if (!office?.lat || !office.lng) throw new Error("The office has no saved location.");
+          origin = { lat: office.lat, lng: office.lng, label: office.name };
         } else if (originMode === "home" && savedHomeAddress && homeAddress.trim() === savedHomeAddress.address) {
           origin = { lat: savedHomeAddress.lat, lng: savedHomeAddress.lng, label: "Home" };
         } else {
@@ -347,6 +355,7 @@ export default function ConfirmVisitModal({
                 gpsLoading={geofenceStatus === "checking" && !gpsCoords && !gpsError}
                 onRequestGps={() => {}}
                 allowGps
+                office={office}
               />
             </div>
           )}

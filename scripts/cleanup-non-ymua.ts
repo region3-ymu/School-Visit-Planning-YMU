@@ -33,7 +33,9 @@ async function main() {
   const apply = process.argv.slice(2).includes("--apply");
 
   const doomed = await prisma.school.findMany({
-    where: { externalId: null },
+    // The office has no YMU-A roster id by design, so it must be excluded here
+    // too — otherwise it shows up in the "will be deleted" preview.
+    where: { externalId: null, isOffice: false },
     select: {
       id: true,
       name: true,
@@ -77,7 +79,7 @@ async function main() {
       {
         deletedAt: new Date().toISOString(),
         visits: await prisma.visit.findMany(),
-        schools: await prisma.school.findMany({ where: { externalId: null } }),
+        schools: await prisma.school.findMany({ where: { externalId: null, isOffice: false } }),
         calendarSyncIssues: await prisma.calendarSyncIssue.findMany(),
       },
       null,
@@ -93,7 +95,7 @@ async function main() {
   // teachers or rules is not the disposable duplicate this script assumes.
   const stillAttached = (
     await prisma.school.findMany({
-      where: { externalId: null },
+      where: { externalId: null, isOffice: false },
       select: {
         name: true,
         _count: { select: { classSessions: true, teachers: true, visitRules: true } },
@@ -112,7 +114,7 @@ async function main() {
     return;
   }
 
-  const deletedSchools = await prisma.school.deleteMany({ where: { externalId: null } });
+  const deletedSchools = await prisma.school.deleteMany({ where: { externalId: null, isOffice: false } });
   console.log(`Schools deleted: ${deletedSchools.count}`);
 
   const deletedIssues = await prisma.calendarSyncIssue.deleteMany({});

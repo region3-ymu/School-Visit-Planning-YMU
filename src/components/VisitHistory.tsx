@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    closeMyDay, getMyDayStatus,
+    closeMyDay, getMyDayStatus, getOfficeLocations,
+    type DayEndRoute,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, Loader2 } from "lucide-react";
@@ -70,6 +71,10 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [isLastStop, setIsLastStop] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
 
+    type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
+    const [office, setOffice] = useState<Office | null>(null);
+    const [dayEndRoute, setDayEndRoute] = useState<DayEndRoute>("home");
+
     const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
     const [closingDay, setClosingDay] = useState(false);
 
@@ -104,15 +109,19 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             }
         });
         getMyDayStatus(new Date().toISOString()).then(setDayStatus);
+        getOfficeLocations().then((list) => setOffice(list[0] ?? null));
     }, []);
 
     // Which of the two pickers owns the current selection — derived, so editing an
     // existing log lights up the right one without extra state to keep in sync.
     const isOtherRegionPick = otherSchools.some(s => s.id === selectedSchool);
+    const isOfficePick = !!office && office.id === selectedSchool;
 
     const isRemote = mode !== "IN_PERSON";
     const showTalkAbout = visitedWith.some((v) => TALK_ABOUT_TRIGGERS.includes(v));
-    const showTeacherObservation = !isRemote && visitedWith.includes("YMU_TEACHER");
+    // No classroom at the office, so the rubric stays out of an office stop even
+    // if "YMU teacher" got ticked.
+    const showTeacherObservation = !isRemote && !isOfficePick && visitedWith.includes("YMU_TEACHER");
     // A past date can't use "where I am now" as the origin — today's position says
     // nothing about where the RM drove from last Tuesday.
     const allowGps = isToday(new Date(visitDate + "T12:00:00"));
@@ -127,6 +136,40 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         (acc[s.regionName] ||= []).push(s);
         return acc;
     }, {});
+
+    // Where the day ends. Offered wherever a return leg gets booked, so the two
+    // entry points can't drift apart.
+    const dayEndOptions: { value: DayEndRoute; label: string }[] = [
+        { value: "home", label: "Home" },
+        ...(office
+            ? ([
+                  { value: "office-home" as const, label: "Office, then home" },
+                  { value: "office" as const, label: "Office" },
+              ])
+            : []),
+    ];
+
+    const renderDayEndPicker = () => {
+        if (dayEndOptions.length < 2) return null;
+        return (
+            <div className="flex flex-wrap gap-1.5">
+                {dayEndOptions.map((opt) => (
+                    <button
+                        key={opt.value}
+                        type="button"
+                        onClick={() => setDayEndRoute(opt.value)}
+                        className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                            dayEndRoute === opt.value
+                                ? "border-indigo-600 bg-indigo-600 text-white"
+                                : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
+                        }`}
+                    >
+                        {opt.label}
+                    </button>
+                ))}
+            </div>
+        );
+    };
 
     const reportUrl = (() => {
         if (!selectedQuarterKey) return null;
@@ -151,6 +194,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setObsSkipReason(null);
         setObsSkipNotes("");
         setIsLastStop(false);
+        setDayEndRoute("home");
         setFormError(null);
     };
 
@@ -197,7 +241,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const handleCloseDay = async () => {
         setClosingDay(true);
         try {
-            await closeMyDay(new Date().toISOString());
+            await closeMyDay(new Date().toISOString(), dayEndRoute);
             setDayStatus(await getMyDayStatus(new Date().toISOString()));
             await fetchHistory();
         } finally {
@@ -244,6 +288,9 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     if (originMode === "gps") {
                         if (!gpsCoords) throw new Error("Still waiting on your location — pick Home or Other address instead.");
                         origin = { ...gpsCoords, label: "Current location" };
+                    } else if (originMode === "office") {
+                        if (!office?.lat || !office.lng) throw new Error("The office has no saved location.");
+                        origin = { lat: office.lat, lng: office.lng, label: office.name };
                     } else if (originMode === "home" && savedHome && homeAddress.trim() === savedHome.address) {
                         origin = { lat: savedHome.lat, lng: savedHome.lng, label: "Home" };
                     } else {
@@ -283,7 +330,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                 // necessarily today — the "End my day" button only ever closes
                 // today, so back-filling a past day depends on this.
                 if (isLastStop && !isRemote) {
-                    await closeMyDay(isoDate);
+                    await closeMyDay(isoDate, dayEndRoute);
                 }
             }
         } catch (err) {
@@ -397,6 +444,8 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             <CheckCircle size={14} /> Day closed
                         </span>
                     ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                            {renderDayEndPicker()}
                         <button
                             onClick={handleCloseDay}
                             disabled={closingDay}
@@ -406,6 +455,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             {closingDay && <Loader2 size={14} className="animate-spin" />}
                             End my day
                         </button>
+                        </div>
                     )}
                 </div>
             )}
@@ -508,6 +558,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                         {schools.map(s => (
                                             <option key={s.id} value={s.id}>{s.name}</option>
                                         ))}
+                                        {office && (
+                                            <optgroup label="Not a school">
+                                                <option value={office.id}>{office.name}</option>
+                                            </optgroup>
+                                        )}
                                     </select>
                                 </div>
                                 {otherSchools.length > 0 && (
@@ -608,6 +663,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 gpsLoading={gpsLoading}
                                                 onRequestGps={requestGps}
                                                 allowGps={allowGps}
+                                                office={office}
                                             />
                                             <p className="text-xs text-gray-400 mt-1">
                                                 Only used if this is your first visit that day — later ones chain from the
@@ -695,6 +751,12 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 Adds the drive from this school back home. Tick it on the last visit
                                                 when you&apos;re logging a whole day after the fact.
                                             </p>
+                                            {isLastStop && dayEndOptions.length > 1 && (
+                                                <div className="mt-2 ml-6">
+                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Where did you go after?</p>
+                                                    {renderDayEndPicker()}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </>

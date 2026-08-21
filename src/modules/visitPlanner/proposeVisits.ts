@@ -122,8 +122,10 @@ export async function proposeVisitsForWeek(
 
   // Fetch all data in parallel
   const schoolWhere = regionId
-    ? { active: true, regionId }
-    : { active: true };
+    // isOffice: the planner proposes schools to visit on a cadence; the office
+    // is neither on a cadence nor a school.
+    ? { active: true, isOffice: false, regionId }
+    : { active: true, isOffice: false };
 
   const [schools, visitRules, doneVisits, classSessionsInWeek] = await Promise.all([
     prisma.school.findMany({

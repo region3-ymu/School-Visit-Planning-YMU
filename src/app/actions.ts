@@ -38,16 +38,20 @@ export async function getDashboardStats(regionFilter?: string | null) {
       ? { regionId: regionFilter }
       : baseWhere;
 
-  const totalSchools = await prisma.school.count({ where: { ...regionWhere, active: true } });
+  // The office is a stop, not a school to be visited on a schedule — counting it
+  // here would inflate coverage against a target it was never part of.
+  const schoolsOnly = { ...regionWhere, active: true, isOffice: false };
+
+  const totalSchools = await prisma.school.count({ where: schoolsOnly });
 
   const visitCounts = await prisma.visit.groupBy({
     by: ["schoolId"],
-    where: { status: "DONE", school: { ...regionWhere, active: true } },
+    where: { status: "DONE", school: schoolsOnly },
     _count: { id: true },
   });
 
   const schools = await prisma.school.findMany({
-    where: { ...regionWhere, active: true },
+    where: schoolsOnly,
     select: { id: true, name: true },
   });
 
@@ -77,7 +81,7 @@ export async function getSchools(regionFilter?: string | null) {
       : baseWhere;
 
   return await prisma.school.findMany({
-    where: { ...regionWhere, active: true },
+    where: { ...regionWhere, active: true, isOffice: false },
     orderBy: { name: "asc" },
   });
 }
@@ -103,6 +107,7 @@ export async function getOtherRegionSchools() {
   const schools = await prisma.school.findMany({
     where: {
       active: true,
+      isOffice: false,
       OR: [{ regionId: { not: ownRegionId } }, { regionId: null }],
     },
     select: { id: true, name: true, region: { select: { name: true } } },
@@ -114,6 +119,23 @@ export async function getOtherRegionSchools() {
     name: s.name,
     regionName: s.region?.name ?? "Unassigned",
   }));
+}
+
+/**
+ * The YMU office(s), for the origin picker, the end-of-day destination and the
+ * manual form's stop list. Empty when none has been seeded, which every caller
+ * treats as "just don't offer the option".
+ */
+export async function getOfficeLocations() {
+  const session = await auth();
+  requireUser(session);
+
+  const offices = await prisma.school.findMany({
+    where: { isOffice: true, active: true },
+    select: { id: true, name: true, address: true, lat: true, lng: true },
+    orderBy: { name: "asc" },
+  });
+  return offices.filter((o) => o.lat != null && o.lng != null);
 }
 
 export async function getWeeklyPlan(
@@ -756,10 +778,9 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
  * Returns null when the day has no in-person visit to close, or when the RM
  * has no saved home and supplied no destination.
  */
-export async function closeMyDay(
-  dateIso: string,
-  destination?: { lat: number; lng: number; label?: string }
-) {
+export type DayEndRoute = "home" | "office" | "office-home";
+
+export async function closeMyDay(dateIso: string, route: DayEndRoute = "home") {
   const session = await auth();
   const user = requireUser(session);
   const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
@@ -776,21 +797,46 @@ export async function closeMyDay(
   });
   if (!last?.school.lat || !last.school.lng) return null;
 
-  let end = destination;
-  if (!end) {
-    const home = await prisma.user.findUnique({
+  const needsHome = route === "home" || route === "office-home";
+  const needsOffice = route === "office" || route === "office-home";
+
+  let home: { lat: number; lng: number } | null = null;
+  if (needsHome) {
+    const u = await prisma.user.findUnique({
       where: { id: user.id },
       select: { homeLat: true, homeLng: true },
     });
-    if (home?.homeLat == null || home.homeLng == null) return null;
-    end = { lat: home.homeLat, lng: home.homeLng, label: "Home" };
+    if (u?.homeLat == null || u.homeLng == null) return null;
+    home = { lat: u.homeLat, lng: u.homeLng };
   }
 
-  const miles = await computeLegMiles(
-    { lat: last.school.lat, lng: last.school.lng },
-    { lat: end.lat, lng: end.lng }
-  );
-  if (miles == null) return null;
+  let office: { lat: number; lng: number } | null = null;
+  if (needsOffice) {
+    const o = await prisma.school.findFirst({
+      where: { isOffice: true, active: true, lat: { not: null }, lng: { not: null } },
+      select: { lat: true, lng: true },
+    });
+    if (o?.lat == null || o.lng == null) return null;
+    office = { lat: o.lat, lng: o.lng };
+  }
+
+  // Stopping at the office on the way home is two legs, not one. Both are the
+  // RM's drive and both are booked, or the office stop would silently erase the
+  // longer half of the trip.
+  const waypoints: { point: { lat: number; lng: number }; label: string }[] = [
+    { point: { lat: last.school.lat, lng: last.school.lng }, label: last.school.name },
+  ];
+  if (needsOffice && office) waypoints.push({ point: office, label: "YMU Office" });
+  if (needsHome && home) waypoints.push({ point: home, label: "Home" });
+
+  let total = 0;
+  for (let i = 0; i < waypoints.length - 1; i++) {
+    const leg = await computeLegMiles(waypoints[i].point, waypoints[i + 1].point);
+    if (leg == null) return null;
+    total += leg;
+  }
+
+  const label = waypoints.slice(1).map((w) => w.label).join(" → ");
 
   const updated = await prisma.$transaction(async (tx) => {
     // A day has exactly one drive home. Clearing any leg booked earlier that
@@ -807,13 +853,13 @@ export async function closeMyDay(
     });
     return tx.visit.update({
       where: { id: last.id },
-      data: { returnMilesDriven: miles, returnLabel: end.label ?? "Home" },
+      data: { returnMilesDriven: total, returnLabel: label },
     });
   });
 
   return {
     fromSchool: last.school.name,
-    toLabel: end.label ?? "Home",
+    toLabel: label,
     returnMiles: decimalToNumber(updated.returnMilesDriven),
   };
 }

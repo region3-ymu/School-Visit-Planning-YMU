@@ -1,8 +1,8 @@
 "use client";
 
-import { Crosshair, Home, MapPin, Loader2 } from "lucide-react";
+import { Building2, Crosshair, Home, MapPin, Loader2 } from "lucide-react";
 
-export type OriginMode = "home" | "gps" | "custom";
+export type OriginMode = "home" | "gps" | "office" | "custom";
 
 /**
  * "Where did you start from?" for a mileage leg.
@@ -26,6 +26,7 @@ export default function OriginPicker({
   gpsLoading,
   onRequestGps,
   allowGps,
+  office,
 }: {
   mode: OriginMode;
   onModeChange: (mode: OriginMode) => void;
@@ -40,16 +41,19 @@ export default function OriginPicker({
   gpsLoading: boolean;
   onRequestGps: () => void;
   allowGps: boolean;
+  /** Omitted when no office has been seeded, which hides the option entirely. */
+  office?: { name: string; address: string | null } | null;
 }) {
   const modes: { value: OriginMode; label: string; icon: typeof Home }[] = [
     { value: "home", label: "Home", icon: Home },
     ...(allowGps ? [{ value: "gps" as const, label: "Current location", icon: Crosshair }] : []),
+    ...(office ? [{ value: "office" as const, label: "YMU Office", icon: Building2 }] : []),
     { value: "custom", label: "Other address", icon: MapPin },
   ];
 
   return (
     <div>
-      <div className="flex gap-2 mb-2">
+      <div className="flex flex-wrap gap-2 mb-2">
         {modes.map(({ value, label, icon: Icon }) => (
           <button
             key={value}
@@ -115,6 +119,13 @@ export default function OriginPicker({
             </p>
           )}
         </div>
+      )}
+
+      {mode === "office" && office && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Starting from {office.name}
+          {office.address ? ` — ${office.address}` : ""}.
+        </p>
       )}
 
       {mode === "custom" && (

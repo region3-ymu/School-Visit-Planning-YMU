@@ -107,6 +107,9 @@ model School {
   geocodeSource        String?
   availability         String    @default("[]")
   active               Boolean   @default(true)
+  /// True for the YMU office. Kept out of school lists, counts, the planner
+  /// and the roster importers, but reachable for mileage like any other stop.
+  isOffice             Boolean             @default(false)
   regionId             String?
   // Unique: two schools pinned to the same calendar would duplicate every
   // ClassSession that calendar produces.
@@ -125,6 +128,7 @@ model School {
   visitRules    VisitRule[]
 
   @@index([regionId])
+  @@index([isOffice])
 }
 
 model Teacher {

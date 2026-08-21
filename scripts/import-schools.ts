@@ -132,7 +132,9 @@ async function main() {
 
   // Fetch all schools in this region
   const existing = await prisma.school.findMany({
-    where: { regionId: regionRecord.id },
+    // isOffice is excluded so the deactivation pass below can never switch the
+    // office off for being absent from a school roster it was never in.
+    where: { regionId: regionRecord.id, isOffice: false },
     select: { id: true, name: true, address: true, active: true, lat: true, lng: true },
   });
 
