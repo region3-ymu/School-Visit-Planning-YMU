@@ -4,11 +4,10 @@ import { useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    closeMyDay, getMyDayStatus, getOfficeLocations,
-    type DayEndRoute,
+    getMyDayStatus, getOfficeLocations,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
-import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, Loader2 } from "lucide-react";
+import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car } from "lucide-react";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
@@ -70,15 +69,12 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [obsNotes, setObsNotes] = useState("");
     const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
     const [obsSkipNotes, setObsSkipNotes] = useState("");
-    const [isLastStop, setIsLastStop] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
 
     type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
     const [office, setOffice] = useState<Office | null>(null);
-    const [dayEndRoute, setDayEndRoute] = useState<DayEndRoute>("home");
 
     const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
-    const [closingDay, setClosingDay] = useState(false);
 
     const fetchHistory = async () => {
         setLoading(true);
@@ -139,40 +135,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         return acc;
     }, {});
 
-    // Where the day ends. Offered wherever a return leg gets booked, so the two
-    // entry points can't drift apart.
-    const dayEndOptions: { value: DayEndRoute; label: string }[] = [
-        { value: "home", label: "Home" },
-        ...(office
-            ? ([
-                  { value: "office-home" as const, label: "Office, then home" },
-                  { value: "office" as const, label: "Office" },
-              ])
-            : []),
-    ];
-
-    const renderDayEndPicker = () => {
-        if (dayEndOptions.length < 2) return null;
-        return (
-            <div className="flex flex-wrap gap-1.5">
-                {dayEndOptions.map((opt) => (
-                    <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => setDayEndRoute(opt.value)}
-                        className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                            dayEndRoute === opt.value
-                                ? "border-indigo-600 bg-indigo-600 text-white"
-                                : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
-                        }`}
-                    >
-                        {opt.label}
-                    </button>
-                ))}
-            </div>
-        );
-    };
-
     const reportUrl = (() => {
         if (!selectedQuarterKey) return null;
         const [schoolYear, label] = selectedQuarterKey.split("|");
@@ -196,8 +158,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setObsNotes("");
         setObsSkipReason(null);
         setObsSkipNotes("");
-        setIsLastStop(false);
-        setDayEndRoute("home");
         setFormError(null);
     };
 
@@ -238,17 +198,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             setHomeSaveStatus("saved");
         } catch {
             setHomeSaveStatus("error");
-        }
-    };
-
-    const handleCloseDay = async () => {
-        setClosingDay(true);
-        try {
-            await closeMyDay(new Date().toISOString(), dayEndRoute);
-            setDayStatus(await getMyDayStatus(new Date().toISOString()));
-            await fetchHistory();
-        } finally {
-            setClosingDay(false);
         }
     };
 
@@ -335,13 +284,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
                 });
-
-                // Books the drive home for the day being logged, which is not
-                // necessarily today — the "End my day" button only ever closes
-                // today, so back-filling a past day depends on this.
-                if (isLastStop && !isRemote) {
-                    await closeMyDay(isoDate, dayEndRoute);
-                }
             }
         } catch (err) {
             setFormError(err instanceof Error ? err.message : "Failed to save the visit");
@@ -448,27 +390,14 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     ` − ${dayStatus.commuteMiles.toFixed(1)} commute`}
                                 {dayStatus.vanMiles > 0 &&
                                     ` · ${dayStatus.vanMiles.toFixed(1)} in the van`}
-                                {!dayStatus.closed && " · drive home not counted yet"}
                             </p>
                         </div>
                     </div>
-                    {dayStatus.closed ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 px-3 py-2">
-                            <CheckCircle size={14} /> Day closed
-                        </span>
-                    ) : (
-                        <div className="flex flex-wrap items-center gap-2">
-                            {renderDayEndPicker()}
-                        <button
-                            onClick={handleCloseDay}
-                            disabled={closingDay}
-                            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                            title="Adds the drive from your last school back home"
-                        >
-                            {closingDay && <Loader2 size={14} className="animate-spin" />}
-                            End my day
-                        </button>
-                        </div>
+                    {office && (
+                        <p className="text-xs text-gray-400 max-w-xs">
+                            Stopped by {office.name}? Log it as a visit — the leg there is paid,
+                            the drive home after isn&apos;t.
+                        </p>
                     )}
                 </div>
             )}
@@ -768,28 +697,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                         )}
                                     </div>
 
-                                    {!isRemote && (
-                                        <div className="rounded-lg border border-gray-200 dark:border-zinc-700 p-3">
-                                            <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isLastStop}
-                                                    onChange={(e) => setIsLastStop(e.target.checked)}
-                                                />
-                                                This was my last stop that day
-                                            </label>
-                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 ml-6">
-                                                Adds the drive from this school back home. Tick it on the last visit
-                                                when you&apos;re logging a whole day after the fact.
-                                            </p>
-                                            {isLastStop && dayEndOptions.length > 1 && (
-                                                <div className="mt-2 ml-6">
-                                                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1.5">Where did you go after?</p>
-                                                    {renderDayEndPicker()}
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
                                 </>
                             )}
 

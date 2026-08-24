@@ -16,6 +16,7 @@ import {
 import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClient";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
+import { haversineMeters } from "@/lib/geo";
 import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
@@ -478,27 +479,45 @@ async function resolveVisitOrigin(
   const chained = await findPreviousVisitToday(visitedById, dayStart, dayEnd);
   if (chained) return { ...chained, isCommute: false };
 
-  if (clientOrigin) {
-    return {
-      lat: clientOrigin.lat,
-      lng: clientOrigin.lng,
-      label: clientOrigin.label ?? "Custom address",
-      isCommute: clientOrigin.isHome === true,
-    };
-  }
-
   const homeUser = await prisma.user.findUnique({
     where: { id: visitedById },
     select: { homeLat: true, homeLng: true },
   });
-  if (homeUser?.homeLat != null && homeUser?.homeLng != null) {
-    return { lat: homeUser.homeLat, lng: homeUser.homeLng, label: "Home", isCommute: true };
+  const home =
+    homeUser?.homeLat != null && homeUser?.homeLng != null
+      ? { lat: homeUser.homeLat, lng: homeUser.homeLng }
+      : null;
+
+  if (clientOrigin) {
+    // Trusting the picker alone would miss someone typing their own address into
+    // "Other address", so the coordinates are checked against the saved home too.
+    // Judged on where it is, not on which button was pressed.
+    const startedAtHome =
+      clientOrigin.isHome === true ||
+      (home != null &&
+        haversineMeters(clientOrigin.lat, clientOrigin.lng, home.lat, home.lng) <= HOME_MATCH_RADIUS_M);
+
+    return {
+      lat: clientOrigin.lat,
+      lng: clientOrigin.lng,
+      label: clientOrigin.label ?? "Custom address",
+      isCommute: startedAtHome,
+    };
   }
+
+  if (home) return { ...home, label: "Home", isCommute: true };
 
   return null;
 }
 
 const METERS_PER_MILE = 1609.344;
+
+/**
+ * How close an origin has to be to the RM's saved home to count as starting from
+ * home. Generous enough to absorb geocoder disagreement between two spellings of
+ * the same address — the two providers here can differ by ~113m on one building.
+ */
+const HOME_MATCH_RADIUS_M = 250;
 
 /**
  * Road miles between two points, or null if the routing service can't say.
@@ -806,98 +825,7 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
  * Returns null when the day has no in-person visit to close, or when the RM
  * has no saved home and supplied no destination.
  */
-export type DayEndRoute = "home" | "office" | "office-home";
-
-export async function closeMyDay(dateIso: string, route: DayEndRoute = "home") {
-  const session = await auth();
-  const user = requireUser(session);
-  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
-
-  const last = await prisma.visit.findFirst({
-    where: {
-      visitedById: user.id,
-      status: "DONE",
-      mode: "IN_PERSON",
-      plannedStartDateTime: { gte: dayStart, lte: dayEnd },
-    },
-    orderBy: { createdAt: "desc" },
-    select: { id: true, school: { select: { name: true, lat: true, lng: true } } },
-  });
-  if (!last?.school.lat || !last.school.lng) return null;
-
-  const needsHome = route === "home" || route === "office-home";
-  const needsOffice = route === "office" || route === "office-home";
-
-  let home: { lat: number; lng: number } | null = null;
-  if (needsHome) {
-    const u = await prisma.user.findUnique({
-      where: { id: user.id },
-      select: { homeLat: true, homeLng: true },
-    });
-    if (u?.homeLat == null || u.homeLng == null) return null;
-    home = { lat: u.homeLat, lng: u.homeLng };
-  }
-
-  let office: { lat: number; lng: number } | null = null;
-  if (needsOffice) {
-    const o = await prisma.school.findFirst({
-      where: { isOffice: true, active: true, lat: { not: null }, lng: { not: null } },
-      select: { lat: true, lng: true },
-    });
-    if (o?.lat == null || o.lng == null) return null;
-    office = { lat: o.lat, lng: o.lng };
-  }
-
-  // Stopping at the office on the way home is two legs, not one. Both are the
-  // RM's drive and both are booked, or the office stop would silently erase the
-  // longer half of the trip.
-  const waypoints: { point: { lat: number; lng: number }; label: string }[] = [
-    { point: { lat: last.school.lat, lng: last.school.lng }, label: last.school.name },
-  ];
-  if (needsOffice && office) waypoints.push({ point: office, label: "YMU Office" });
-  if (needsHome && home) waypoints.push({ point: home, label: "Home" });
-
-  // Each leg is judged on where it *ends*: arriving home is the evening commute
-  // and isn't reimbursed, while last school → office is still work.
-  let total = 0;
-  let commute = 0;
-  for (let i = 0; i < waypoints.length - 1; i++) {
-    const leg = await computeLegMiles(waypoints[i].point, waypoints[i + 1].point);
-    if (leg == null) return null;
-    total += leg;
-    if (waypoints[i + 1].label === "Home") commute += leg;
-  }
-
-  const label = waypoints.slice(1).map((w) => w.label).join(" → ");
-
-  const updated = await prisma.$transaction(async (tx) => {
-    // A day has exactly one drive home. Clearing any leg booked earlier that
-    // day keeps a re-run — or a later visit that turns out to be the real last
-    // stop — from counting the return twice.
-    await tx.visit.updateMany({
-      where: {
-        visitedById: user.id,
-        plannedStartDateTime: { gte: dayStart, lte: dayEnd },
-        returnMilesDriven: { not: null },
-        id: { not: last.id },
-      },
-      data: { returnMilesDriven: null, returnLabel: null, returnCommuteMiles: null },
-    });
-    return tx.visit.update({
-      where: { id: last.id },
-      data: { returnMilesDriven: total, returnLabel: label, returnCommuteMiles: commute },
-    });
-  });
-
-  return {
-    fromSchool: last.school.name,
-    toLabel: label,
-    returnMiles: decimalToNumber(updated.returnMilesDriven),
-    reimbursableMiles: total - commute,
-  };
-}
-
-/** Whether the RM's day is already closed, for the button's state. */
+/** Today's driving at a glance, for the banner above the history table. */
 export async function getMyDayStatus(dateIso: string) {
   const session = await auth();
   const user = requireUser(session);
@@ -940,7 +868,6 @@ export async function getMyDayStatus(dateIso: string) {
     // What that comes to as a reimbursement.
     totalMiles: drivenMiles - commuteMiles,
     vanMiles: van.reduce((sum, v) => sum + drivenOf(v), 0),
-    closed: visits.some((v) => v.returnMilesDriven != null),
   };
 }
 
