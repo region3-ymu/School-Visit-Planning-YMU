@@ -177,7 +177,7 @@ export default function ConfirmVisitModal({
 
     setSubmitting(true);
     try {
-      let origin: { lat: number; lng: number; label?: string } | undefined;
+      let origin: { lat: number; lng: number; label?: string; isHome?: boolean } | undefined;
 
       if (!isRemote && chainState.status === "needs-input") {
         if (originMode === "gps") {
@@ -187,7 +187,7 @@ export default function ConfirmVisitModal({
           if (!office?.lat || !office.lng) throw new Error("The office has no saved location.");
           origin = { lat: office.lat, lng: office.lng, label: office.name };
         } else if (originMode === "home" && savedHomeAddress && homeAddress.trim() === savedHomeAddress.address) {
-          origin = { lat: savedHomeAddress.lat, lng: savedHomeAddress.lng, label: "Home" };
+          origin = { lat: savedHomeAddress.lat, lng: savedHomeAddress.lng, label: "Home", isHome: true };
         } else {
           const addressToGeocode = originMode === "home" ? homeAddress.trim() : customAddress.trim();
           const res = await fetch("/api/routing/geocode", {
@@ -197,7 +197,13 @@ export default function ConfirmVisitModal({
           });
           const geo = await res.json();
           if (!res.ok) throw new Error(geo.error ?? "Could not find that address");
-          origin = { lat: geo.lat, lng: geo.lng, label: originMode === "home" ? "Home" : geo.label };
+          origin = {
+            lat: geo.lat,
+            lng: geo.lng,
+            label: originMode === "home" ? "Home" : geo.label,
+            // Starting from home makes this the morning commute, which is not paid.
+            isHome: originMode === "home",
+          };
         }
       }
 

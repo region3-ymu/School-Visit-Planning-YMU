@@ -360,6 +360,12 @@ const originCoordsSchema = z.object({
   lat: z.number(),
   lng: z.number(),
   label: z.string().optional(),
+  /**
+   * Set when the RM started from home. That first leg is commute under the IRS
+   * rule and isn't reimbursed. Sent explicitly rather than inferred from the
+   * label, which is free text and would break the moment it was reworded.
+   */
+  isHome: z.boolean().optional(),
 });
 
 const observationRatingSchema = z.enum(["NEEDS_SUPPORT", "DEVELOPING", "MEETS", "EXCEEDS"]);
@@ -465,13 +471,20 @@ async function resolveVisitOrigin(
   visitedById: string,
   dayStart: Date,
   dayEnd: Date,
-  clientOrigin?: { lat: number; lng: number; label?: string }
-): Promise<{ lat: number; lng: number; label: string } | null> {
+  clientOrigin?: { lat: number; lng: number; label?: string; isHome?: boolean }
+): Promise<{ lat: number; lng: number; label: string; isCommute: boolean } | null> {
+  // Chained from the previous stop: work location to work location, which is
+  // business mileage however the day began.
   const chained = await findPreviousVisitToday(visitedById, dayStart, dayEnd);
-  if (chained) return chained;
+  if (chained) return { ...chained, isCommute: false };
 
   if (clientOrigin) {
-    return { lat: clientOrigin.lat, lng: clientOrigin.lng, label: clientOrigin.label ?? "Custom address" };
+    return {
+      lat: clientOrigin.lat,
+      lng: clientOrigin.lng,
+      label: clientOrigin.label ?? "Custom address",
+      isCommute: clientOrigin.isHome === true,
+    };
   }
 
   const homeUser = await prisma.user.findUnique({
@@ -479,7 +492,7 @@ async function resolveVisitOrigin(
     select: { homeLat: true, homeLng: true },
   });
   if (homeUser?.homeLat != null && homeUser?.homeLng != null) {
-    return { lat: homeUser.homeLat, lng: homeUser.homeLng, label: "Home" };
+    return { lat: homeUser.homeLat, lng: homeUser.homeLng, label: "Home", isCommute: true };
   }
 
   return null;
@@ -541,6 +554,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   // milesDriven unset.
   let milesDriven: number | null = null;
   let originLabel: string | null = null;
+  let commuteMiles: number | null = null;
 
   // A remote visit has no leg to measure. Leaving milesDriven null (rather than
   // zero) is what keeps it out of the mileage report entirely.
@@ -552,6 +566,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
       if (origin) {
         originLabel = origin.label;
         milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
+        // Home to the first school is the morning commute, not business mileage.
+        if (origin.isCommute && milesDriven != null) commuteMiles = milesDriven;
       }
     } catch (err) {
       console.error("confirmVisit mileage calc failed:", err);
@@ -579,6 +595,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         mode: data.mode,
         vehicle: data.vehicle,
         milesDriven: milesDriven ?? undefined,
+        commuteMiles: commuteMiles ?? undefined,
         originLabel: originLabel ?? undefined,
         visitedWith: data.visitedWith,
         principalNotes: data.principalNotes ?? undefined,
@@ -668,6 +685,8 @@ export async function getVisitHistory(regionFilter?: string | null) {
     // Decimal doesn't survive the server/client boundary.
     milesDriven: decimalToNumber(v.milesDriven),
     returnMilesDriven: decimalToNumber(v.returnMilesDriven),
+    commuteMiles: decimalToNumber(v.commuteMiles),
+    returnCommuteMiles: decimalToNumber(v.returnCommuteMiles),
     originLabel: v.originLabel,
     // Non-null only for rows outside the region being viewed, so the table can flag them.
     otherRegionName:
@@ -728,12 +747,14 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
   const isRemote = data.mode !== "IN_PERSON";
   let milesDriven: number | null = null;
   let originLabel: string | null = null;
+  let commuteMiles: number | null = null;
 
   if (!isRemote && school.lat != null && school.lng != null) {
     const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
     if (origin) {
       originLabel = origin.label;
       milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
+      if (origin.isCommute && milesDriven != null) commuteMiles = milesDriven;
     }
   }
 
@@ -752,6 +773,7 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       mode: data.mode,
       vehicle: data.vehicle,
       milesDriven: milesDriven ?? undefined,
+      commuteMiles: commuteMiles ?? undefined,
       originLabel: originLabel ?? undefined,
       visitedWith: data.visitedWith,
       principalNotes: data.principalNotes ?? undefined,
@@ -835,11 +857,15 @@ export async function closeMyDay(dateIso: string, route: DayEndRoute = "home") {
   if (needsOffice && office) waypoints.push({ point: office, label: "YMU Office" });
   if (needsHome && home) waypoints.push({ point: home, label: "Home" });
 
+  // Each leg is judged on where it *ends*: arriving home is the evening commute
+  // and isn't reimbursed, while last school → office is still work.
   let total = 0;
+  let commute = 0;
   for (let i = 0; i < waypoints.length - 1; i++) {
     const leg = await computeLegMiles(waypoints[i].point, waypoints[i + 1].point);
     if (leg == null) return null;
     total += leg;
+    if (waypoints[i + 1].label === "Home") commute += leg;
   }
 
   const label = waypoints.slice(1).map((w) => w.label).join(" → ");
@@ -855,11 +881,11 @@ export async function closeMyDay(dateIso: string, route: DayEndRoute = "home") {
         returnMilesDriven: { not: null },
         id: { not: last.id },
       },
-      data: { returnMilesDriven: null, returnLabel: null },
+      data: { returnMilesDriven: null, returnLabel: null, returnCommuteMiles: null },
     });
     return tx.visit.update({
       where: { id: last.id },
-      data: { returnMilesDriven: total, returnLabel: label },
+      data: { returnMilesDriven: total, returnLabel: label, returnCommuteMiles: commute },
     });
   });
 
@@ -867,6 +893,7 @@ export async function closeMyDay(dateIso: string, route: DayEndRoute = "home") {
     fromSchool: last.school.name,
     toLabel: label,
     returnMiles: decimalToNumber(updated.returnMilesDriven),
+    reimbursableMiles: total - commute,
   };
 }
 
@@ -882,26 +909,37 @@ export async function getMyDayStatus(dateIso: string) {
       status: "DONE",
       plannedStartDateTime: { gte: dayStart, lte: dayEnd },
     },
-    select: { milesDriven: true, returnMilesDriven: true, mode: true, vehicle: true },
+    select: {
+      milesDriven: true,
+      returnMilesDriven: true,
+      commuteMiles: true,
+      returnCommuteMiles: true,
+      mode: true,
+      vehicle: true,
+    },
   });
 
-  const milesOf = (v: (typeof visits)[number]) =>
+  const drivenOf = (v: (typeof visits)[number]) =>
     (decimalToNumber(v.milesDriven) ?? 0) + (decimalToNumber(v.returnMilesDriven) ?? 0);
+  const commuteOf = (v: (typeof visits)[number]) =>
+    (decimalToNumber(v.commuteMiles) ?? 0) + (decimalToNumber(v.returnCommuteMiles) ?? 0);
 
   const personal = visits.filter((v) => v.vehicle === "PERSONAL");
   const van = visits.filter((v) => v.vehicle === "YMU_VAN");
 
-  const outbound = personal.reduce((sum, v) => sum + (decimalToNumber(v.milesDriven) ?? 0), 0);
-  const ret = personal.reduce((sum, v) => sum + (decimalToNumber(v.returnMilesDriven) ?? 0), 0);
+  const drivenMiles = personal.reduce((sum, v) => sum + drivenOf(v), 0);
+  const commuteMiles = personal.reduce((sum, v) => sum + commuteOf(v), 0);
 
   return {
     visitCount: visits.length,
     inPersonCount: visits.filter((v) => v.mode === "IN_PERSON").length,
-    outboundMiles: outbound,
-    returnMiles: ret,
-    // Own car only — the figure the RM is actually owed for.
-    totalMiles: outbound + ret,
-    vanMiles: van.reduce((sum, v) => sum + milesOf(v), 0),
+    // Everything actually driven in the RM's own car today.
+    drivenMiles,
+    // The first and last legs of the day, which the IRS rule leaves unpaid.
+    commuteMiles,
+    // What that comes to as a reimbursement.
+    totalMiles: drivenMiles - commuteMiles,
+    vanMiles: van.reduce((sum, v) => sum + drivenOf(v), 0),
     closed: visits.some((v) => v.returnMilesDriven != null),
   };
 }

@@ -217,6 +217,13 @@ model Visit {
   // day's last visit so a day can only ever carry one return.
   returnMilesDriven             Decimal?            @db.Decimal(6, 2)
   returnLabel                   String?
+  /// Share of milesDriven that is commute — set when the day started from home.
+  /// The IRS rule excludes it from reimbursement. Payable miles for a visit are
+  /// milesDriven + returnMilesDriven - commuteMiles - returnCommuteMiles.
+  commuteMiles                  Decimal?            @db.Decimal(6, 2)
+  /// Share of returnMilesDriven that is commute — the leg that ends at home.
+  /// Separate from commuteMiles so each has a single writer.
+  returnCommuteMiles            Decimal?            @db.Decimal(6, 2)
   outcome                       VisitOutcome?
   outcomeNotes                  String?
   visitedWith                   VisitedWithOption[]

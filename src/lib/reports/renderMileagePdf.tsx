@@ -38,7 +38,7 @@ function Table({ headers, rows }: { headers: string[]; rows: string[][] }) {
 }
 
 function MileageReportDocument({ data, regionLabel }: { data: MileageReportData; regionLabel?: string }) {
-  const { period, totalMiles, outboundMiles, returnMiles, vanMiles, vanVisitCount, byRM, bySchool } = data;
+  const { period, totalMiles, drivenMiles, commuteMiles, vanMiles, vanVisitCount, byRM, bySchool } = data;
 
   return (
     <Document>
@@ -51,7 +51,8 @@ function MileageReportDocument({ data, regionLabel }: { data: MileageReportData;
         {regionLabel && <Text style={styles.subtitle}>Region: {regionLabel}</Text>}
         <Text style={styles.total}>Reimbursable miles: {totalMiles.toFixed(1)}</Text>
         <Text style={styles.subtitle}>
-          {outboundMiles.toFixed(1)} to schools + {returnMiles.toFixed(1)} returning home, own vehicle
+          {drivenMiles.toFixed(1)} driven in an own vehicle, less {commuteMiles.toFixed(1)} of commute
+          (first and last leg of each day, per the IRS rule)
         </Text>
         {vanMiles > 0 && (
           <Text style={styles.subtitle}>
@@ -62,16 +63,17 @@ function MileageReportDocument({ data, regionLabel }: { data: MileageReportData;
 
         <Text style={styles.sectionTitle}>By Regional Manager</Text>
         <Table
-          headers={["Regional Manager", "Visits", "Reimbursable", "Van"]}
+          headers={["Regional Manager", "Visits", "Reimbursable", "Commute", "Van"]}
           rows={
             byRM.length > 0
               ? byRM.map((r) => [
                   r.userName,
                   String(r.visitCount),
                   r.totalMiles.toFixed(1),
+                  r.commuteMiles > 0 ? r.commuteMiles.toFixed(1) : "—",
                   r.vanMiles > 0 ? r.vanMiles.toFixed(1) : "—",
                 ])
-              : [["—", "—", "—", "—"]]
+              : [["—", "—", "—", "—", "—"]]
           }
         />
 

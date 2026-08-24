@@ -4,14 +4,23 @@ import { decimalToNumber } from "@/lib/decimal";
 export type MileageReportData = {
   /** Human-readable name of the window, e.g. "2026-27 Q2" or "Aug 2026". */
   period: { label: string; startDate: Date; endDate: Date };
-  /** Own-car miles only — the reimbursable figure. */
+  /** Own-car miles after the commute deduction — the payable figure. */
   totalMiles: number;
-  outboundMiles: number;
-  returnMiles: number;
+  /** Everything actually driven in an own car, before the deduction. */
+  drivenMiles: number;
+  /** First and last legs of each day, which the IRS rule leaves unpaid. */
+  commuteMiles: number;
   /** Driven in the YMU van. Recorded for the vehicle, owed to nobody. */
   vanMiles: number;
   vanVisitCount: number;
-  byRM: { userId: string; userName: string; totalMiles: number; visitCount: number; vanMiles: number }[];
+  byRM: {
+    userId: string;
+    userName: string;
+    totalMiles: number;
+    commuteMiles: number;
+    visitCount: number;
+    vanMiles: number;
+  }[];
   bySchool: { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }[];
   visits: {
     schoolName: string;
@@ -20,6 +29,8 @@ export type MileageReportData = {
     date: Date;
     milesDriven: number;
     returnMiles: number;
+    commuteMiles: number;
+    reimbursableMiles: number;
     mode: string;
     vehicle: string;
   }[];
@@ -57,8 +68,8 @@ export async function getMileageReportData(
 
   const byRMMap = new Map<string, MileageReportData["byRM"][number]>();
   const bySchoolMap = new Map<string, MileageReportData["bySchool"][number]>();
-  let outboundMiles = 0;
-  let returnMiles = 0;
+  let drivenMiles = 0;
+  let commuteMiles = 0;
   let vanMiles = 0;
   let vanVisitCount = 0;
 
@@ -70,6 +81,10 @@ export async function getMileageReportData(
     // The drive home is booked on the day's last visit, so it rolls up under the
     // same RM and school as that visit's outbound leg.
     const miles = outbound + back;
+    // Home at one end: the day's opening and closing legs, unpaid under the
+    // IRS rule even though they were genuinely driven.
+    const commute =
+      (decimalToNumber(v.commuteMiles) ?? 0) + (decimalToNumber(v.returnCommuteMiles) ?? 0);
 
     // Van driving is YMU's own fuel, so it is tracked apart and never reaches
     // the totals a reimbursement is calculated from.
@@ -78,15 +93,22 @@ export async function getMileageReportData(
       vanMiles += miles;
       vanVisitCount += 1;
     } else {
-      outboundMiles += outbound;
-      returnMiles += back;
+      drivenMiles += miles;
+      commuteMiles += commute;
     }
+    const reimbursable = isVan ? 0 : Math.max(0, miles - commute);
 
     const rmId = v.visitedById ?? "unknown";
     const rmName = v.visitedBy?.name ?? v.visitedBy?.email ?? "Unknown";
-    const rmEntry = byRMMap.get(rmId) ?? { userId: rmId, userName: rmName, totalMiles: 0, visitCount: 0, vanMiles: 0 };
-    if (isVan) rmEntry.vanMiles += miles;
-    else rmEntry.totalMiles += miles;
+    const rmEntry =
+      byRMMap.get(rmId) ??
+      { userId: rmId, userName: rmName, totalMiles: 0, commuteMiles: 0, visitCount: 0, vanMiles: 0 };
+    if (isVan) {
+      rmEntry.vanMiles += miles;
+    } else {
+      rmEntry.totalMiles += reimbursable;
+      rmEntry.commuteMiles += commute;
+    }
     rmEntry.visitCount += 1;
     byRMMap.set(rmId, rmEntry);
 
@@ -110,6 +132,8 @@ export async function getMileageReportData(
       date: v.plannedStartDateTime,
       milesDriven: outbound,
       returnMiles: back,
+      commuteMiles: commute,
+      reimbursableMiles: reimbursable,
       mode: v.mode,
       vehicle: v.vehicle,
     });
@@ -117,9 +141,9 @@ export async function getMileageReportData(
 
   return {
     period: { label: params.label, startDate: params.startDate, endDate: params.endDate },
-    totalMiles: outboundMiles + returnMiles,
-    outboundMiles,
-    returnMiles,
+    totalMiles: Math.max(0, drivenMiles - commuteMiles),
+    drivenMiles,
+    commuteMiles,
     vanMiles,
     vanVisitCount,
     byRM: [...byRMMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),

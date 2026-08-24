@@ -149,13 +149,13 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
         </div>
       ) : data ? (
         <>
-          {/* "Reimbursable", not "Total" — the van card below is real driving that
-              is deliberately excluded, and a card labelled Total sitting next to it
-              would read as though it included the van. */}
+          {/* Reimbursable is the headline because it is the only figure anyone
+              acts on. The other two cards say what was taken off it and why:
+              the commute at each end of the day, and the van. */}
           <div className={`grid grid-cols-1 gap-4 mb-6 ${data.vanMiles > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
             <SummaryCard label="Reimbursable miles" value={data.totalMiles.toFixed(1)} highlight />
-            <SummaryCard label="To schools" value={data.outboundMiles.toFixed(1)} />
-            <SummaryCard label="Returning home" value={data.returnMiles.toFixed(1)} />
+            <SummaryCard label="Total driven" value={data.drivenMiles.toFixed(1)} />
+            <SummaryCard label="Commute (not paid)" value={data.commuteMiles.toFixed(1)} />
             {data.vanMiles > 0 && <SummaryCard label="YMU van (not owed)" value={data.vanMiles.toFixed(1)} />}
           </div>
 
@@ -167,11 +167,12 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
 
           <ReportTable
             title="By Regional Manager"
-            headers={["Regional Manager", "Visits", "Reimbursable", "Van"]}
+            headers={["Regional Manager", "Visits", "Reimbursable", "Commute", "Van"]}
             rows={data.byRM.map((r) => [
               r.userName,
               String(r.visitCount),
               r.totalMiles.toFixed(1),
+              r.commuteMiles > 0 ? r.commuteMiles.toFixed(1) : "—",
               r.vanMiles > 0 ? r.vanMiles.toFixed(1) : "—",
             ])}
           />

@@ -286,7 +286,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             } else {
                 // Only the first in-person visit of the day needs an origin; the server
                 // chains later ones from the previous stop and ignores what we send.
-                let origin: { lat: number; lng: number; label?: string } | undefined;
+                let origin: { lat: number; lng: number; label?: string; isHome?: boolean } | undefined;
                 if (!isRemote) {
                     if (originMode === "gps") {
                         if (!gpsCoords) throw new Error("Still waiting on your location — pick Home or Other address instead.");
@@ -295,7 +295,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                         if (!office?.lat || !office.lng) throw new Error("The office has no saved location.");
                         origin = { lat: office.lat, lng: office.lng, label: office.name };
                     } else if (originMode === "home" && savedHome && homeAddress.trim() === savedHome.address) {
-                        origin = { lat: savedHome.lat, lng: savedHome.lng, label: "Home" };
+                        origin = { lat: savedHome.lat, lng: savedHome.lng, label: "Home", isHome: true };
                     } else {
                         const address = originMode === "home" ? homeAddress.trim() : customAddress.trim();
                         if (address) {
@@ -306,7 +306,13 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             });
                             const geo = await res.json();
                             if (!res.ok) throw new Error(geo.error ?? "Could not find that address");
-                            origin = { lat: geo.lat, lng: geo.lng, label: originMode === "home" ? "Home" : geo.label };
+                            origin = {
+                                lat: geo.lat,
+                                lng: geo.lng,
+                                label: originMode === "home" ? "Home" : geo.label,
+                                // Starting from home makes this the morning commute, which is not paid.
+                                isHome: originMode === "home",
+                            };
                         }
                     }
                 }
@@ -434,14 +440,15 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                         <div className="text-sm">
                             <p className="font-medium text-gray-800 dark:text-gray-100">
                                 Today: {dayStatus.visitCount} visit{dayStatus.visitCount === 1 ? "" : "s"},{" "}
-                                {dayStatus.totalMiles.toFixed(1)} miles
+                                {dayStatus.totalMiles.toFixed(1)} reimbursable miles
                             </p>
                             <p className="text-xs text-gray-500 dark:text-gray-400">
-                                {dayStatus.closed
-                                    ? `${dayStatus.outboundMiles.toFixed(1)} out + ${dayStatus.returnMiles.toFixed(1)} back, own car`
-                                    : "The drive home isn't counted yet."}
+                                {dayStatus.drivenMiles.toFixed(1)} driven
+                                {dayStatus.commuteMiles > 0 &&
+                                    ` − ${dayStatus.commuteMiles.toFixed(1)} commute`}
                                 {dayStatus.vanMiles > 0 &&
-                                    ` — plus ${dayStatus.vanMiles.toFixed(1)} in the van, not reimbursed`}
+                                    ` · ${dayStatus.vanMiles.toFixed(1)} in the van`}
+                                {!dayStatus.closed && " · drive home not counted yet"}
                             </p>
                         </div>
                     </div>
@@ -476,7 +483,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                 <tr>
                                     <th className="px-6 py-4 font-semibold">Date</th>
                                     <th className="px-6 py-4 font-semibold">School</th>
-                                    <th className="px-6 py-4 font-semibold">Miles</th>
+                                    <th className="px-6 py-4 font-semibold">Reimbursable</th>
                                     <th className="px-6 py-4 font-semibold">Notes / Reason</th>
                                     <th className="px-6 py-4 font-semibold">Status</th>
                                     <th className="px-6 py-4 font-semibold text-right">Actions</th>
@@ -511,9 +518,17 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                         title={log.originLabel ? `From ${log.originLabel}` : undefined}
                                                         className={log.vehicle === "YMU_VAN" ? "text-gray-400" : undefined}
                                                     >
-                                                        {((log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)).toFixed(1)}
-                                                        {log.returnMilesDriven != null && (
-                                                            <span className="text-xs text-gray-400 ml-1">incl. return</span>
+                                                        {(
+                                                            (log.milesDriven ?? 0) +
+                                                            (log.returnMilesDriven ?? 0) -
+                                                            (log.vehicle === "YMU_VAN"
+                                                                ? (log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)
+                                                                : (log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0))
+                                                        ).toFixed(1)}
+                                                        {(log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0) > 0 && (
+                                                            <span className="text-xs text-gray-400 ml-1">
+                                                                of {((log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)).toFixed(1)} driven
+                                                            </span>
                                                         )}
                                                         {log.vehicle === "YMU_VAN" && (
                                                             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-400 text-xs font-semibold align-middle">
