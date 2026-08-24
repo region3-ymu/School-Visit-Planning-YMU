@@ -206,6 +206,9 @@ model Visit {
   visitedById                   String?
   visitedBy                     User?               @relation(fields: [visitedById], references: [id])
   mode                          VisitMode           @default(IN_PERSON)
+  /// Whose fuel. Van miles are recorded but never reimbursable — YMU already
+  /// paid for them.
+  vehicle                       VehicleType         @default(PERSONAL)
   // Driven distance for this visit's leg, computed server-side from the
   // chosen origin (home/GPS/custom address) to the school's coordinates.
   milesDriven                   Decimal?            @db.Decimal(6, 2)
@@ -245,6 +248,7 @@ model Visit {
   @@index([schoolId])
   @@index([status])
   @@index([visitedById])
+  @@index([vehicle])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
@@ -291,6 +295,12 @@ enum VisitMode {
   IN_PERSON
   ONLINE
   PHONE
+}
+
+/// Which vehicle a visit was driven in. Decides whether its miles are owed back.
+enum VehicleType {
+  PERSONAL
+  YMU_VAN
 }
 
 enum VisitedWithOption {

@@ -380,6 +380,8 @@ const confirmVisitSchema = z
     // In person is the default; online and phone visits skip the drive and
     // the classroom observation entirely.
     mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
+    // Van miles are measured but never reimbursed; see the mileage report.
+    vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
     principalNotes: z.string().max(2000).optional(),
@@ -575,6 +577,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         reason: "Confirmed via Weekly Planner",
         visitedById: user.id,
         mode: data.mode,
+        vehicle: data.vehicle,
         milesDriven: milesDriven ?? undefined,
         originLabel: originLabel ?? undefined,
         visitedWith: data.visitedWith,
@@ -661,6 +664,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
     notes: v.reason,
     school: v.school,
     mode: v.mode,
+    vehicle: v.vehicle,
     // Decimal doesn't survive the server/client boundary.
     milesDriven: decimalToNumber(v.milesDriven),
     returnMilesDriven: decimalToNumber(v.returnMilesDriven),
@@ -680,6 +684,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
  */
 const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
+  vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
   origin: originCoordsSchema.optional(),
   notes: z.string().max(2000).optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
@@ -745,6 +750,7 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       // is supported. Stamping the author is what keeps it in their own history.
       visitedById: user.id,
       mode: data.mode,
+      vehicle: data.vehicle,
       milesDriven: milesDriven ?? undefined,
       originLabel: originLabel ?? undefined,
       visitedWith: data.visitedWith,
@@ -876,19 +882,27 @@ export async function getMyDayStatus(dateIso: string) {
       status: "DONE",
       plannedStartDateTime: { gte: dayStart, lte: dayEnd },
     },
-    select: { milesDriven: true, returnMilesDriven: true, mode: true },
+    select: { milesDriven: true, returnMilesDriven: true, mode: true, vehicle: true },
   });
 
-  const outbound = visits.reduce((sum, v) => sum + (decimalToNumber(v.milesDriven) ?? 0), 0);
-  const ret = visits.reduce((sum, v) => sum + (decimalToNumber(v.returnMilesDriven) ?? 0), 0);
+  const milesOf = (v: (typeof visits)[number]) =>
+    (decimalToNumber(v.milesDriven) ?? 0) + (decimalToNumber(v.returnMilesDriven) ?? 0);
+
+  const personal = visits.filter((v) => v.vehicle === "PERSONAL");
+  const van = visits.filter((v) => v.vehicle === "YMU_VAN");
+
+  const outbound = personal.reduce((sum, v) => sum + (decimalToNumber(v.milesDriven) ?? 0), 0);
+  const ret = personal.reduce((sum, v) => sum + (decimalToNumber(v.returnMilesDriven) ?? 0), 0);
 
   return {
     visitCount: visits.length,
     inPersonCount: visits.filter((v) => v.mode === "IN_PERSON").length,
     outboundMiles: outbound,
     returnMiles: ret,
+    // Own car only — the figure the RM is actually owed for.
     totalMiles: outbound + ret,
-    closed: ret > 0,
+    vanMiles: van.reduce((sum, v) => sum + milesOf(v), 0),
+    closed: visits.some((v) => v.returnMilesDriven != null),
   };
 }
 

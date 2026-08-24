@@ -4,10 +4,14 @@ import { decimalToNumber } from "@/lib/decimal";
 export type MileageReportData = {
   /** Human-readable name of the window, e.g. "2026-27 Q2" or "Aug 2026". */
   period: { label: string; startDate: Date; endDate: Date };
+  /** Own-car miles only — the reimbursable figure. */
   totalMiles: number;
   outboundMiles: number;
   returnMiles: number;
-  byRM: { userId: string; userName: string; totalMiles: number; visitCount: number }[];
+  /** Driven in the YMU van. Recorded for the vehicle, owed to nobody. */
+  vanMiles: number;
+  vanVisitCount: number;
+  byRM: { userId: string; userName: string; totalMiles: number; visitCount: number; vanMiles: number }[];
   bySchool: { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }[];
   visits: {
     schoolName: string;
@@ -17,6 +21,7 @@ export type MileageReportData = {
     milesDriven: number;
     returnMiles: number;
     mode: string;
+    vehicle: string;
   }[];
 };
 
@@ -50,10 +55,12 @@ export async function getMileageReportData(
     orderBy: { plannedStartDateTime: "asc" },
   });
 
-  const byRMMap = new Map<string, { userId: string; userName: string; totalMiles: number; visitCount: number }>();
-  const bySchoolMap = new Map<string, { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }>();
+  const byRMMap = new Map<string, MileageReportData["byRM"][number]>();
+  const bySchoolMap = new Map<string, MileageReportData["bySchool"][number]>();
   let outboundMiles = 0;
   let returnMiles = 0;
+  let vanMiles = 0;
+  let vanVisitCount = 0;
 
   const reportVisits: MileageReportData["visits"] = [];
 
@@ -63,13 +70,23 @@ export async function getMileageReportData(
     // The drive home is booked on the day's last visit, so it rolls up under the
     // same RM and school as that visit's outbound leg.
     const miles = outbound + back;
-    outboundMiles += outbound;
-    returnMiles += back;
+
+    // Van driving is YMU's own fuel, so it is tracked apart and never reaches
+    // the totals a reimbursement is calculated from.
+    const isVan = v.vehicle === "YMU_VAN";
+    if (isVan) {
+      vanMiles += miles;
+      vanVisitCount += 1;
+    } else {
+      outboundMiles += outbound;
+      returnMiles += back;
+    }
 
     const rmId = v.visitedById ?? "unknown";
     const rmName = v.visitedBy?.name ?? v.visitedBy?.email ?? "Unknown";
-    const rmEntry = byRMMap.get(rmId) ?? { userId: rmId, userName: rmName, totalMiles: 0, visitCount: 0 };
-    rmEntry.totalMiles += miles;
+    const rmEntry = byRMMap.get(rmId) ?? { userId: rmId, userName: rmName, totalMiles: 0, visitCount: 0, vanMiles: 0 };
+    if (isVan) rmEntry.vanMiles += miles;
+    else rmEntry.totalMiles += miles;
     rmEntry.visitCount += 1;
     byRMMap.set(rmId, rmEntry);
 
@@ -80,6 +97,8 @@ export async function getMileageReportData(
       totalMiles: 0,
       visitCount: 0,
     };
+    // Per-school stays whole-trip: the question there is how much driving a
+    // school generates, not who pays for it.
     schoolEntry.totalMiles += miles;
     schoolEntry.visitCount += 1;
     bySchoolMap.set(v.schoolId, schoolEntry);
@@ -92,6 +111,7 @@ export async function getMileageReportData(
       milesDriven: outbound,
       returnMiles: back,
       mode: v.mode,
+      vehicle: v.vehicle,
     });
   }
 
@@ -100,6 +120,8 @@ export async function getMileageReportData(
     totalMiles: outboundMiles + returnMiles,
     outboundMiles,
     returnMiles,
+    vanMiles,
+    vanVisitCount,
     byRM: [...byRMMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     bySchool: [...bySchoolMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     visits: reportVisits,

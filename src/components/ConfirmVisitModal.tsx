@@ -5,6 +5,7 @@ import { X, MapPin, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
 import { haversineMeters } from "@/lib/geo";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
+import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
   EMPTY_OBSERVATIONS,
   type ObservationDomainKey,
@@ -71,6 +72,7 @@ export default function ConfirmVisitModal({
   // possible mileage origin means the RM is never prompted for GPS twice.
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
   type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
   const [office, setOffice] = useState<Office | null>(null);
 
@@ -201,6 +203,7 @@ export default function ConfirmVisitModal({
 
       await confirmVisit(schoolId, visitDate.toISOString(), {
         mode,
+        vehicle,
         origin,
         visitedWith,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
@@ -277,6 +280,8 @@ export default function ConfirmVisitModal({
               </p>
             )}
           </div>
+
+          {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
           {/* Geofence status */}
           {!isRemote && (

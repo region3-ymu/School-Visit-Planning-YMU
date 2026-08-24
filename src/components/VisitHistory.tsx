@@ -10,6 +10,7 @@ import {
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, Loader2 } from "lucide-react";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
+import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
     EMPTY_OBSERVATIONS,
     type ObservationDomainKey,
@@ -59,6 +60,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
     const [gpsError, setGpsError] = useState<string | null>(null);
     const [gpsLoading, setGpsLoading] = useState(false);
+    const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
 
     const [visitedWith, setVisitedWith] = useState<string[]>([]);
     const [principalNotes, setPrincipalNotes] = useState("");
@@ -184,6 +186,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setNotes("");
         setMode("IN_PERSON");
         setOriginMode("home");
+        setVehicle("PERSONAL");
         setCustomAddress("");
         setVisitedWith([]);
         setPrincipalNotes("");
@@ -310,6 +313,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
                 await addManualVisit(selectedSchool, isoDate, {
                     mode,
+                    vehicle,
                     origin,
                     notes: notes.trim() || undefined,
                     visitedWith,
@@ -434,8 +438,10 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             </p>
                             <p className="text-xs text-gray-500 dark:text-gray-400">
                                 {dayStatus.closed
-                                    ? `${dayStatus.outboundMiles.toFixed(1)} out + ${dayStatus.returnMiles.toFixed(1)} back home`
+                                    ? `${dayStatus.outboundMiles.toFixed(1)} out + ${dayStatus.returnMiles.toFixed(1)} back, own car`
                                     : "The drive home isn't counted yet."}
+                                {dayStatus.vanMiles > 0 &&
+                                    ` — plus ${dayStatus.vanMiles.toFixed(1)} in the van, not reimbursed`}
                             </p>
                         </div>
                     </div>
@@ -501,10 +507,18 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 {log.milesDriven == null && log.returnMilesDriven == null ? (
                                                     <span className="text-gray-400">—</span>
                                                 ) : (
-                                                    <span title={log.originLabel ? `From ${log.originLabel}` : undefined}>
+                                                    <span
+                                                        title={log.originLabel ? `From ${log.originLabel}` : undefined}
+                                                        className={log.vehicle === "YMU_VAN" ? "text-gray-400" : undefined}
+                                                    >
                                                         {((log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)).toFixed(1)}
                                                         {log.returnMilesDriven != null && (
                                                             <span className="text-xs text-gray-400 ml-1">incl. return</span>
+                                                        )}
+                                                        {log.vehicle === "YMU_VAN" && (
+                                                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-400 text-xs font-semibold align-middle">
+                                                                Van
+                                                            </span>
                                                         )}
                                                     </span>
                                                 )}
@@ -643,6 +657,8 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                             </p>
                                         )}
                                     </div>
+
+                                    {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
                                     {!isRemote && (
                                         <div>

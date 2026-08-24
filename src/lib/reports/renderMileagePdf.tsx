@@ -38,7 +38,7 @@ function Table({ headers, rows }: { headers: string[]; rows: string[][] }) {
 }
 
 function MileageReportDocument({ data, regionLabel }: { data: MileageReportData; regionLabel?: string }) {
-  const { period, totalMiles, outboundMiles, returnMiles, byRM, bySchool } = data;
+  const { period, totalMiles, outboundMiles, returnMiles, vanMiles, vanVisitCount, byRM, bySchool } = data;
 
   return (
     <Document>
@@ -49,18 +49,29 @@ function MileageReportDocument({ data, regionLabel }: { data: MileageReportData;
           {period.endDate.toISOString().slice(0, 10)})
         </Text>
         {regionLabel && <Text style={styles.subtitle}>Region: {regionLabel}</Text>}
-        <Text style={styles.total}>Total miles driven: {totalMiles.toFixed(1)}</Text>
+        <Text style={styles.total}>Reimbursable miles: {totalMiles.toFixed(1)}</Text>
         <Text style={styles.subtitle}>
-          {outboundMiles.toFixed(1)} to schools + {returnMiles.toFixed(1)} returning home
+          {outboundMiles.toFixed(1)} to schools + {returnMiles.toFixed(1)} returning home, own vehicle
         </Text>
+        {vanMiles > 0 && (
+          <Text style={styles.subtitle}>
+            Not reimbursable: {vanMiles.toFixed(1)} mi in the YMU van across {vanVisitCount} visit
+            {vanVisitCount === 1 ? "" : "s"}
+          </Text>
+        )}
 
         <Text style={styles.sectionTitle}>By Regional Manager</Text>
         <Table
-          headers={["Regional Manager", "Visits", "Total Miles"]}
+          headers={["Regional Manager", "Visits", "Reimbursable", "Van"]}
           rows={
             byRM.length > 0
-              ? byRM.map((r) => [r.userName, String(r.visitCount), r.totalMiles.toFixed(1)])
-              : [["—", "—", "—"]]
+              ? byRM.map((r) => [
+                  r.userName,
+                  String(r.visitCount),
+                  r.totalMiles.toFixed(1),
+                  r.vanMiles > 0 ? r.vanMiles.toFixed(1) : "—",
+                ])
+              : [["—", "—", "—", "—"]]
           }
         />
 

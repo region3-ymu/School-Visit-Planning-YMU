@@ -149,25 +149,36 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
         </div>
       ) : data ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-            <SummaryCard label="Total miles" value={data.totalMiles.toFixed(1)} highlight />
+          {/* "Reimbursable", not "Total" — the van card below is real driving that
+              is deliberately excluded, and a card labelled Total sitting next to it
+              would read as though it included the van. */}
+          <div className={`grid grid-cols-1 gap-4 mb-6 ${data.vanMiles > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
+            <SummaryCard label="Reimbursable miles" value={data.totalMiles.toFixed(1)} highlight />
             <SummaryCard label="To schools" value={data.outboundMiles.toFixed(1)} />
             <SummaryCard label="Returning home" value={data.returnMiles.toFixed(1)} />
+            {data.vanMiles > 0 && <SummaryCard label="YMU van (not owed)" value={data.vanMiles.toFixed(1)} />}
           </div>
 
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             {data.period.label} · {data.visits.length} visit{data.visits.length === 1 ? "" : "s"} with mileage
+            {data.vanVisitCount > 0 &&
+              `, of which ${data.vanVisitCount} in the van`}
           </p>
 
           <ReportTable
             title="By Regional Manager"
-            headers={["Regional Manager", "Visits", "Total Miles"]}
-            rows={data.byRM.map((r) => [r.userName, String(r.visitCount), r.totalMiles.toFixed(1)])}
+            headers={["Regional Manager", "Visits", "Reimbursable", "Van"]}
+            rows={data.byRM.map((r) => [
+              r.userName,
+              String(r.visitCount),
+              r.totalMiles.toFixed(1),
+              r.vanMiles > 0 ? r.vanMiles.toFixed(1) : "—",
+            ])}
           />
 
           <ReportTable
             title="By School"
-            headers={["School", "Region", "Visits", "Total Miles"]}
+            headers={["School", "Region", "Visits", "All Miles"]}
             rows={data.bySchool.map((r) => [
               r.schoolName,
               r.regionName ?? "—",
