@@ -2,7 +2,22 @@ import dotenv from "dotenv"; dotenv.config();
 import { PrismaClient } from "@prisma/client";
 const p = new PrismaClient();
 // Confirmado por el usuario: ya no trabajan ahi, o son error de escritura.
+// Confirmed gone, or a misspelling of someone who is here under another
+// spelling. Kept by name because these are judgements a person made, not
+// something the data can tell you.
 const GONE = ["Luis Ocasio", "Camila Olmos", "Robby Robbinette", "Bret Kamer"];
+
+/**
+ * Also remove any calendar-invented row holding no classes at all.
+ *
+ * The sync used to create a Teacher per name it saw, per school — so one person
+ * became several rows, and the import then moved every class onto their single
+ * real YMU-A row. What is left carries nothing: Renzo Vargas had three empty
+ * rows beside the real one. Keeping them means a school's list shows the same
+ * person twice, once with classes and once without, and an observation could be
+ * filed against the empty one.
+ */
+const DELETE_ALL_EMPTY = true;
 (async () => {
   const schools = await p.school.findMany({ select: { name: true } });
   const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -15,7 +30,8 @@ const GONE = ["Luis Ocasio", "Camila Olmos", "Robby Robbinette", "Bret Kamer"];
 
   const esNombreDeEscuela = orphans.filter(t => schoolNames.has(norm(t.name)) || /k-8|senior high|middle school|elementary|academy|center|westview/i.test(t.name));
   const yaNoEstan = orphans.filter(t => GONE.includes(t.name));
-  const borrar = [...new Map([...esNombreDeEscuela, ...yaNoEstan].map(t => [t.id, t])).values()];
+  const vacias = DELETE_ALL_EMPTY ? orphans : [];
+  const borrar = [...new Map([...esNombreDeEscuela, ...yaNoEstan, ...vacias].map(t => [t.id, t])).values()];
   const quedan = orphans.filter(t => !borrar.some(b => b.id === t.id));
 
   console.log(`Huerfanas totales: ${orphans.length}`);
