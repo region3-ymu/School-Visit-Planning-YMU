@@ -87,6 +87,13 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * enough to outrank any real gap when candidates are scored. Never shown.
  */
 const NEVER_VISITED_RANK = 999;
+
+/**
+ * How long a school can go without anyone physically turning up before it is
+ * called out. Deliberately longer than any cadence: this is not "due", it is
+ * "nobody has been in a fortnight", which a run of phone calls can hide.
+ */
+const NOT_SEEN_IN_PERSON_DAYS = 14;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
 function getWeekNumber(date: Date): number {
@@ -159,7 +166,10 @@ export async function proposeVisitsForWeek(
     prisma.visit.findMany({
       where: { status: "DONE", school: schoolWhere },
       orderBy: { plannedStartDateTime: "desc" },
-      select: { schoolId: true, plannedStartDateTime: true },
+      // Mode matters here: a phone call is contact, not a visit. Counting one as
+      // the school's last visit reset its cadence and stopped it being proposed,
+      // so a school could go a term without anybody walking in.
+      select: { schoolId: true, plannedStartDateTime: true, mode: true },
     }),
     prisma.classSession.findMany({
       where: {
@@ -175,12 +185,14 @@ export async function proposeVisitsForWeek(
 
   if (schools.length === 0) return [];
 
-  // Last visit per school (most recent DONE)
+  // The cadence is about being there, so it tracks in-person visits only.
+  // Remote contact is kept separately: it doesn't excuse a school from being
+  // visited, but it is worth saying on the card that somebody has been in touch.
   const lastVisitBySchool = new Map<string, Date>();
+  const lastRemoteBySchool = new Map<string, Date>();
   for (const v of doneVisits) {
-    if (!lastVisitBySchool.has(v.schoolId)) {
-      lastVisitBySchool.set(v.schoolId, v.plannedStartDateTime);
-    }
+    const target = v.mode === "IN_PERSON" ? lastVisitBySchool : lastRemoteBySchool;
+    if (!target.has(v.schoolId)) target.set(v.schoolId, v.plannedStartDateTime);
   }
 
   // Active VisitRule per school (latest rule where effectiveTo is null = still active)
@@ -223,6 +235,8 @@ export async function proposeVisitsForWeek(
     subjectName?: string;
     teacherId?: string;
     teacherName?: string;
+    notSeenInPerson: boolean;
+    weeksSinceInPerson: number | null;
     noClassWarning: boolean;
     visitRuleFrequency: string;
     visitRuleNote?: string;
@@ -249,6 +263,10 @@ export async function proposeVisitsForWeek(
     const rule = activeRuleBySchool.get(school.id);
     const freq: FrequencyType = rule?.frequencyType ?? "BIWEEKLY";
     const lastVisit = lastVisitBySchool.get(school.id);
+    const lastRemote = lastRemoteBySchool.get(school.id);
+    const daysSinceRemote = lastRemote
+      ? Math.floor((today.getTime() - lastRemote.getTime()) / MS_PER_DAY)
+      : null;
     const lastVisitWeek = lastVisit ? getWeekNumber(lastVisit) : 0;
 
     if (!shouldProposeThisWeek(freq, lastVisitWeek, currentWeek)) continue;
@@ -298,11 +316,26 @@ export async function proposeVisitsForWeek(
 
       // Never-visited is checked first: it is also "overdue", and letting that
       // branch win meant this message was unreachable.
-      const reasonText = neverVisited
-        ? "Never visited"
+      const baseReason = neverVisited
+        ? "Never visited in person"
         : isOverdue
           ? `Overdue by ${daysSinceLast - freqDays} days`
           : `Due in ${freqDays - daysSinceLast} days`;
+      // Said alongside, not instead: a call is worth knowing about and is not a
+      // reason to skip the school.
+      const remoteNote =
+        daysSinceRemote != null
+          ? daysSinceRemote === 0
+            ? " · called today"
+            : ` · last contacted remotely ${daysSinceRemote}d ago`
+          : "";
+      const reasonText = baseReason + remoteNote;
+      // Flagged apart from "overdue", which a school can be by a single day.
+      // This is the case worth interrupting someone about: nobody has walked in
+      // for a fortnight, whatever the cadence says and however many calls there
+      // have been in between.
+      const weeksSinceInPerson = neverVisited ? null : Math.floor(daysSinceLast / 7);
+      const notSeenInPerson = neverVisited || daysSinceLast >= NOT_SEEN_IN_PERSON_DAYS;
 
       const candidate: Candidate = {
         schoolId: school.id,
@@ -317,6 +350,8 @@ export async function proposeVisitsForWeek(
         score,
         reason: reasonText,
         subjectName: bestSession?.subject?.name,
+        notSeenInPerson,
+        weeksSinceInPerson,
         teacherId: bestSession?.teacher?.externalId ? bestSession.teacher.id : undefined,
         teacherName: bestSession?.teacher?.externalId ? bestSession.teacher.name : undefined,
         noClassWarning: !hasClass,
@@ -501,6 +536,8 @@ export async function proposeVisitsForWeek(
         subjectName: slot.subjectName,
         teacherId: slot.teacherId,
         teacherName: slot.teacherName,
+        notSeenInPerson: candidate.notSeenInPerson,
+        weeksSinceInPerson: candidate.weeksSinceInPerson,
       }))
     );
   }
@@ -553,6 +590,8 @@ export async function proposeVisitsForWeek(
         subjectName: c.subjectName,
         teacherId: c.teacherId,
         teacherName: c.teacherName,
+        notSeenInPerson: c.notSeenInPerson,
+        weeksSinceInPerson: c.weeksSinceInPerson,
         noClassWarning: c.noClassWarning,
         visitRuleFrequency: c.visitRuleFrequency,
         visitRuleNote: c.visitRuleNote,

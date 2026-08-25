@@ -23,6 +23,9 @@ export interface ProposedVisit {
   subjectName?: string;
   teacherId?: string;
   teacherName?: string;
+  /** Nobody has physically been to this school in a fortnight or more. */
+  notSeenInPerson?: boolean;
+  weeksSinceInPerson?: number | null;
   /** True when no ClassSession exists for this school on this day */
   noClassWarning?: boolean;
   /** The school's active VisitRule frequency, or "DEFAULT" if using the default BIWEEKLY */

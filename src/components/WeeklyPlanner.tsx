@@ -626,6 +626,20 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                                         </p>
 
+                                                        {visit.notSeenInPerson && !visit.isCompleted && (
+
+                                                            <p className="inline-flex items-center gap-1 text-[10px] leading-tight bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 rounded text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900 w-fit font-medium">
+
+                                                                <AlertCircle size={10} className="shrink-0" />
+
+                                                                {visit.weeksSinceInPerson == null
+                                                                    ? "Nobody has visited in person yet"
+                                                                    : `No in-person visit in ${visit.weeksSinceInPerson} week${visit.weeksSinceInPerson === 1 ? "" : "s"}`}
+
+                                                            </p>
+
+                                                        )}
+
                                                         {visit.noClassWarning && !visit.isCompleted && (
 
                                                             <p className="inline-flex items-center gap-1 text-[10px] leading-tight bg-red-50 dark:bg-red-950/30 px-2 py-1.5 rounded text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900 w-fit font-medium">

@@ -13,6 +13,13 @@ export type MileageReportData = {
   /** Driven in the YMU van. Recorded for the vehicle, owed to nobody. */
   vanMiles: number;
   vanVisitCount: number;
+  /**
+   * Visits made by phone or video. No miles by definition, so they never touch
+   * the mileage figures — but they are work done, and a month of them would
+   * otherwise read as a month of nothing.
+   */
+  onlineVisitCount: number;
+  phoneVisitCount: number;
   byRM: {
     userId: string;
     userName: string;
@@ -60,9 +67,14 @@ export async function getMileageReportData(
   const visits = await prisma.visit.findMany({
     where: {
       status: "DONE",
-      // A visit with neither leg measured contributes no miles but would still
-      // inflate the visit counts below.
-      OR: [{ milesDriven: { not: null } }, { returnMilesDriven: { not: null } }],
+      // Remote visits carry no mileage by design, so they are let in
+      // deliberately rather than swept up with the unmeasured ones — counted,
+      // never priced. Anything else with no legs measured is left out.
+      OR: [
+        { milesDriven: { not: null } },
+        { returnMilesDriven: { not: null } },
+        { mode: { in: ["ONLINE", "PHONE"] } },
+      ],
       plannedStartDateTime: { gte: params.startDate, lte: params.endDate },
       // By who drove, not by whose school. See regionId above.
       ...(params.regionId ? { visitedBy: { regionId: params.regionId } } : {}),
@@ -81,6 +93,8 @@ export async function getMileageReportData(
   let commuteMiles = 0;
   let vanMiles = 0;
   let vanVisitCount = 0;
+  let onlineVisitCount = 0;
+  let phoneVisitCount = 0;
 
   const reportVisits: MileageReportData["visits"] = [];
 
@@ -89,6 +103,9 @@ export async function getMileageReportData(
     const back = decimalToNumber(v.returnMilesDriven) ?? 0;
     // The drive home is booked on the day's last visit, so it rolls up under the
     // same RM and school as that visit's outbound leg.
+    if (v.mode === "ONLINE") onlineVisitCount += 1;
+    if (v.mode === "PHONE") phoneVisitCount += 1;
+
     const miles = outbound + back;
     // Home at one end: the day's opening and closing legs, unpaid under the
     // IRS rule even though they were genuinely driven.
@@ -155,6 +172,8 @@ export async function getMileageReportData(
     commuteMiles,
     vanMiles,
     vanVisitCount,
+    onlineVisitCount,
+    phoneVisitCount,
     byRM: [...byRMMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     bySchool: [...bySchoolMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),
     visits: reportVisits,

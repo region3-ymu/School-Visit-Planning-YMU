@@ -18,6 +18,8 @@ export function proposedVisitToVisitInfo(p: ProposedVisit): VisitInfo {
     subjectName: p.subjectName,
     teacherId: p.teacherId,
     teacherName: p.teacherName,
+    notSeenInPerson: p.notSeenInPerson,
+    weeksSinceInPerson: p.weeksSinceInPerson,
     isPinned: false,
     isCompleted: false,
     viableOptionsThisWeek: [],

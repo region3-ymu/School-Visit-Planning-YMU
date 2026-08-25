@@ -160,9 +160,20 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
           </div>
 
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-            {data.period.label} · {data.visits.length} visit{data.visits.length === 1 ? "" : "s"} with mileage
-            {data.vanVisitCount > 0 &&
-              `, of which ${data.vanVisitCount} in the van`}
+            {data.period.label} · {data.visits.length} visit{data.visits.length === 1 ? "" : "s"}
+            {data.vanVisitCount > 0 && `, ${data.vanVisitCount} in the van`}
+            {(data.onlineVisitCount > 0 || data.phoneVisitCount > 0) && (
+              <>
+                {" · "}
+                {[
+                  data.onlineVisitCount > 0 && `${data.onlineVisitCount} online`,
+                  data.phoneVisitCount > 0 && `${data.phoneVisitCount} by phone`,
+                ]
+                  .filter(Boolean)
+                  .join(" and ")}
+                {" (no driving)"}
+              </>
+            )}
           </p>
 
           <ReportTable
