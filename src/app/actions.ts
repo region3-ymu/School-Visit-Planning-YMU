@@ -427,11 +427,17 @@ const confirmVisitSchema = z
     path: ["instrumentRequestDetails"],
   });
 
+/**
+ * The Miami calendar day containing `date`, as a half-open-ish instant range.
+ *
+ * Anchored to Miami rather than the host so a visit written on one server and
+ * read on another still falls inside its own day — the chaining that prices
+ * each leg depends on finding the day's earlier visits.
+ */
 function dayRangeFor(date: Date): { dayStart: Date; dayEnd: Date } {
-  const dayStart = new Date(date);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(date);
-  dayEnd.setHours(23, 59, 59, 999);
+  const dayKey = dayKeyInAppZone(date);
+  const dayStart = zonedDayStart(dayKey);
+  const dayEnd = new Date(zonedDayStart(addDaysToDayKey(dayKey, 1)).getTime() - 1);
   return { dayStart, dayEnd };
 }
 
@@ -572,11 +578,13 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   });
   if (!school) throw new Error("School not found");
 
+  // Anchored to 9am Miami, not the host's 9am. setHours() here meant that a
+  // date landing after 8pm Miami — already tomorrow in UTC — was filed under
+  // the wrong day on a UTC server.
   const date = new Date(dateIso);
-  const plannedStart = new Date(date);
-  plannedStart.setHours(9, 0, 0, 0);
-  const plannedEnd = new Date(date);
-  plannedEnd.setHours(10, 0, 0, 0);
+  const dayKey = dayKeyInAppZone(date);
+  const plannedStart = new Date(zonedDayStart(dayKey).getTime() + 9 * 3600_000);
+  const plannedEnd = new Date(plannedStart.getTime() + 3600_000);
   const { dayStart, dayEnd } = dayRangeFor(date);
 
   // Mileage is auto-derived from the RM's own route order that day (previous

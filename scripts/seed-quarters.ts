@@ -16,6 +16,7 @@
  */
 import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
+import { addDaysToDayKey, zonedDayStart } from "../src/lib/timezone";
 
 dotenv.config();
 dotenv.config({ path: ".env.local" });
@@ -31,12 +32,14 @@ const QUARTERS = [
   { label: "Q4", start: "2027-03-29", end: "2027-06-04" },
 ];
 
-/** Parsed as local midnight / end-of-day so a quarter covers its whole last day. */
-function startOfDayUtc(iso: string): Date {
-  return new Date(`${iso}T00:00:00.000Z`);
+// Anchored to Miami, not UTC. Seeded at UTC midnight, Q1 began at 8pm on Aug 12
+// local — so an evening visit the day before the quarter opened would have
+// counted inside it.
+function startOfDay(dayKey: string): Date {
+  return zonedDayStart(dayKey);
 }
-function endOfDayUtc(iso: string): Date {
-  return new Date(`${iso}T23:59:59.999Z`);
+function endOfDay(dayKey: string): Date {
+  return new Date(zonedDayStart(addDaysToDayKey(dayKey, 1)).getTime() - 1);
 }
 
 async function main() {
@@ -48,8 +51,8 @@ async function main() {
 
   console.log(`\nSeeding ${SCHOOL_YEAR}:`);
   for (const q of QUARTERS) {
-    const startDate = startOfDayUtc(q.start);
-    const endDate = endOfDayUtc(q.end);
+    const startDate = startOfDay(q.start);
+    const endDate = endOfDay(q.end);
     await prisma.quarter.upsert({
       where: { schoolYear_label: { schoolYear: SCHOOL_YEAR, label: q.label } },
       create: { schoolYear: SCHOOL_YEAR, label: q.label, startDate, endDate },

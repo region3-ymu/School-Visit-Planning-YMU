@@ -199,8 +199,9 @@ export async function proposeVisitsForWeek(
     sessionsBySchoolDay.get(key)!.push(s);
   }
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // Miami's today, not the host's — the boundary decides which of the week's
+  // days count as already past.
+  const today = zonedDayStart(dayKeyInAppZone(new Date()));
 
   type Candidate = {
     schoolId: string;

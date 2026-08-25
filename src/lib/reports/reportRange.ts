@@ -1,10 +1,12 @@
-import {
-  startOfWeek, endOfWeek,
-  startOfMonth, endOfMonth,
-  startOfYear, endOfYear,
-  subMonths, format,
-} from "date-fns";
+import { format } from "date-fns";
 import type { PrismaClient } from "@prisma/client";
+import {
+  addDaysToDayKey,
+  dayKeyInAppZone,
+  mondayOfDayKey,
+  toAppZoneDayKey,
+  zonedDayStart,
+} from "@/lib/timezone";
 
 /**
  * The windows a mileage report can be asked for.
@@ -34,67 +36,104 @@ export const RANGE_PRESETS: { value: RangePreset; label: string }[] = [
 
 export type ResolvedRange = { startDate: Date; endDate: Date; label: string };
 
-function endOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(23, 59, 59, 999);
-  return x;
-}
-
-function startOfDay(d: Date): Date {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
-
 /**
- * Turns a preset into concrete dates.
+ * Report periods are built from Miami calendar dates, never from the host's.
  *
- * `quarterKey` ("2026-27|Q2") is only consulted for the "quarter" preset; when
- * it's absent the quarter containing `anchor` is used, and if no quarter covers
- * that date at all the caller gets a clear error rather than a silently empty
- * report.
+ * Wrapping date-fns wasn't enough: startOfMonth(anchor) on a UTC server returns
+ * the 1st at 00:00 UTC, which is 8pm on the 31st in Miami — so "August" started
+ * in July. All the arithmetic below is done on "yyyy-MM-dd" keys, which carry no
+ * zone at all, and only converted to instants at the end.
  */
+function keyParts(key: string): { y: number; m: number; d: number } {
+  const [y, m, d] = key.split("-").map(Number);
+  return { y, m, d };
+}
+
+function makeKey(y: number, m: number, d: number): string {
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+function addMonthsToKey(key: string, months: number): string {
+  const { y, m, d } = keyParts(key);
+  const total = y * 12 + (m - 1) + months;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1;
+  // Clamp for short months: 31 Mar minus one month is 28/29 Feb, not 3 Mar.
+  const lastDay = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+  return makeKey(ny, nm, Math.min(d, lastDay));
+}
+
+function lastDayOfMonthKey(key: string): string {
+  const { y, m } = keyParts(key);
+  return makeKey(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+}
+
+/** First instant of a Miami calendar day. */
+function dayStart(key: string): Date {
+  return zonedDayStart(key);
+}
+
+/** Last instant of a Miami calendar day. */
+function dayEnd(key: string): Date {
+  return new Date(zonedDayStart(addDaysToDayKey(key, 1)).getTime() - 1);
+}
+
+/** Labels are built from the key so they can't drift a day either. */
+function labelDate(key: string, pattern: string): string {
+  return format(zonedDayStart(key), pattern);
+}
+
 export async function resolveRange(
   prisma: PrismaClient,
   preset: RangePreset,
   opts: { anchor?: Date; quarterKey?: string | null; start?: string | null; end?: string | null } = {}
 ): Promise<ResolvedRange> {
   const anchor = opts.anchor ?? new Date();
+  const anchorKey = dayKeyInAppZone(anchor);
 
   switch (preset) {
     case "week": {
-      const startDate = startOfWeek(anchor, { weekStartsOn: 1 });
-      const endDate = endOfWeek(anchor, { weekStartsOn: 1 });
-      return { startDate, endDate, label: `Week of ${format(startDate, "MMM d, yyyy")}` };
+      const startKey = mondayOfDayKey(anchorKey);
+      const endKey = addDaysToDayKey(startKey, 6);
+      return {
+        startDate: dayStart(startKey),
+        endDate: dayEnd(endKey),
+        label: `Week of ${labelDate(startKey, "MMM d, yyyy")}`,
+      };
     }
-    case "month":
+    case "month": {
+      const { y, m } = keyParts(anchorKey);
+      const startKey = makeKey(y, m, 1);
       return {
-        startDate: startOfMonth(anchor),
-        endDate: endOfMonth(anchor),
-        label: format(anchor, "MMMM yyyy"),
+        startDate: dayStart(startKey),
+        endDate: dayEnd(lastDayOfMonthKey(anchorKey)),
+        label: labelDate(startKey, "MMMM yyyy"),
       };
+    }
     case "3months":
+    case "6months": {
+      const months = preset === "3months" ? 3 : 6;
+      const startKey = addMonthsToKey(anchorKey, -months);
       return {
-        startDate: startOfDay(subMonths(anchor, 3)),
-        endDate: endOfDay(anchor),
-        label: `Last 3 months (${format(subMonths(anchor, 3), "MMM d")} – ${format(anchor, "MMM d, yyyy")})`,
+        startDate: dayStart(startKey),
+        endDate: dayEnd(anchorKey),
+        label: `Last ${months} months (${labelDate(startKey, "MMM d")} – ${labelDate(anchorKey, "MMM d, yyyy")})`,
       };
-    case "6months":
+    }
+    case "year": {
+      const { y } = keyParts(anchorKey);
       return {
-        startDate: startOfDay(subMonths(anchor, 6)),
-        endDate: endOfDay(anchor),
-        label: `Last 6 months (${format(subMonths(anchor, 6), "MMM d")} – ${format(anchor, "MMM d, yyyy")})`,
+        startDate: dayStart(makeKey(y, 1, 1)),
+        endDate: dayEnd(makeKey(y, 12, 31)),
+        label: String(y),
       };
-    case "year":
-      return {
-        startDate: startOfYear(anchor),
-        endDate: endOfYear(anchor),
-        label: format(anchor, "yyyy"),
-      };
+    }
     case "custom": {
       if (!opts.start || !opts.end) throw new Error("A custom range needs both a start and an end date");
-      const startDate = startOfDay(new Date(opts.start));
-      const endDate = endOfDay(new Date(opts.end));
+      const startKey = toAppZoneDayKey(opts.start);
+      const endKey = toAppZoneDayKey(opts.end);
+      const startDate = dayStart(startKey);
+      const endDate = dayEnd(endKey);
       if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
         throw new Error("Invalid custom range dates");
       }
@@ -102,7 +141,7 @@ export async function resolveRange(
       return {
         startDate,
         endDate,
-        label: `${format(startDate, "MMM d, yyyy")} – ${format(endDate, "MMM d, yyyy")}`,
+        label: `${labelDate(startKey, "MMM d, yyyy")} – ${labelDate(endKey, "MMM d, yyyy")}`,
       };
     }
     case "quarter": {
