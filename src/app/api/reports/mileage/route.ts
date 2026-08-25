@@ -35,6 +35,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "format must be pdf or csv" }, { status: 400 });
   }
 
+  // Whose driving, not whose schools: an RM is owed for every mile they put in,
+  // including at another region's school and at the region-less office.
   // Admins may scope to any region; everyone else is pinned to their own.
   const regionId = user.role === "ADMIN" ? regionIdParam ?? undefined : scopeToRegion(user);
 

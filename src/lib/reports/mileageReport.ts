@@ -40,6 +40,14 @@ export type MileageReportParams = {
   startDate: Date;
   endDate: Date;
   label: string;
+  /**
+   * The region whose *drivers* this report covers — not whose schools.
+   *
+   * A reimbursement is owed to a person for the miles they drove, wherever they
+   * drove them. Scoping on the school's region lost every mile an RM put in
+   * outside their own patch: a Central RM at Edison Park, which is East, and
+   * every stop at the office, which belongs to no region at all.
+   */
   regionId?: string;
   /** Narrow the report to a single regional manager. */
   visitedById?: string;
@@ -56,19 +64,8 @@ export async function getMileageReportData(
       // inflate the visit counts below.
       OR: [{ milesDriven: { not: null } }, { returnMilesDriven: { not: null } }],
       plannedStartDateTime: { gte: params.startDate, lte: params.endDate },
-      // The office belongs to no region — it serves all of them — so a plain
-      // school.regionId filter dropped every stop there. That silently removed
-      // both the payable legs *to* the office and the commute legs *from* home
-      // to it, understating a month by a third. It is included when the RM who
-      // drove it belongs to the region being reported on.
-      ...(params.regionId
-        ? {
-            OR: [
-              { school: { regionId: params.regionId } },
-              { school: { isOffice: true }, visitedBy: { regionId: params.regionId } },
-            ],
-          }
-        : {}),
+      // By who drove, not by whose school. See regionId above.
+      ...(params.regionId ? { visitedBy: { regionId: params.regionId } } : {}),
       ...(params.visitedById ? { visitedById: params.visitedById } : {}),
     },
     include: {
