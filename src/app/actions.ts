@@ -4,7 +4,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { requireUser, schoolRegionWhere, scopeToRegion } from "@/lib/auth-helpers";
 import { VisitInfo } from "@/lib/types";
-import { format, addDays, startOfWeek } from "date-fns";
+import { format, addDays } from "date-fns";
 import { proposeVisitsForWeek } from "@/modules/visitPlanner";
 import { proposedVisitToVisitInfo } from "@/lib/visitPlannerAdapter";
 import { OpenRouteDistanceService } from "@/modules/visitPlanner";
@@ -17,7 +17,14 @@ import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClien
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { haversineMeters } from "@/lib/geo";
-import { dayKeyInAppZone, formatTimeInAppZone } from "@/lib/timezone";
+import {
+  dayKeyInAppZone,
+  formatTimeInAppZone,
+  addDaysToDayKey,
+  mondayOfDayKey,
+  toAppZoneDayKey,
+  zonedDayStart,
+} from "@/lib/timezone";
 import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
@@ -156,8 +163,10 @@ export async function getWeeklyPlan(
       ? regionFilter
       : user.regionId ?? undefined;
 
-  const date = new Date(weekStartDateIso);
-  const weekStart = startOfWeek(date, { weekStartsOn: 1 });
+  // Accepts either a "yyyy-MM-dd" week key or, from an older client, a full
+  // ISO instant — both resolved to a Miami calendar day before picking the week,
+  // so the host's zone never decides which Monday was meant.
+  const weekStart = zonedDayStart(mondayOfDayKey(toAppZoneDayKey(weekStartDateIso)));
 
   const distanceService =
     process.env.OPENROUTE_SERVICE_API_KEY ? new OpenRouteDistanceService() : undefined;
@@ -278,9 +287,11 @@ export async function getSchoolOptionsForWeek(
   schoolId: string,
   weekStartDateIso: string
 ): Promise<import("@/lib/types").ViableOption[]> {
-  const date = new Date(weekStartDateIso);
-  const start = startOfWeek(date, { weekStartsOn: 1 });
-  const weekEnd = addDays(start, 5);
+  // Same Miami-anchored week as getWeeklyPlan, so the two can't disagree about
+  // which days the week covers.
+  const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
+  const start = zonedDayStart(weekKey);
+  const weekEnd = zonedDayStart(addDaysToDayKey(weekKey, 5));
   const weekDates = Array.from({ length: 5 }, (_, i) => addDays(start, i));
 
   const school = await prisma.school.findUnique({ where: { id: schoolId } });
@@ -334,9 +345,11 @@ export async function getSchoolCalendarOptionsForWeek(
   schoolId: string,
   weekStartDateIso: string
 ): Promise<import("@/lib/types").ViableOption[]> {
-  const date = new Date(weekStartDateIso);
-  const start = startOfWeek(date, { weekStartsOn: 1 });
-  const weekEnd = addDays(start, 5);
+  // Same Miami-anchored week as getWeeklyPlan, so the two can't disagree about
+  // which days the week covers.
+  const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
+  const start = zonedDayStart(weekKey);
+  const weekEnd = zonedDayStart(addDaysToDayKey(weekKey, 5));
 
   const sessions = await prisma.classSession.findMany({
     where: { schoolId, startDateTime: { gte: start }, endDateTime: { lt: weekEnd } },

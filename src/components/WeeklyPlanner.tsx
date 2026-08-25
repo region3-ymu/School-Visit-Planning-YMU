@@ -31,6 +31,10 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
     const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
 
     const weekStartDate = new Date(weekStartDateStr);
+    // Sent to the server as a plain calendar date. An ISO instant would be
+    // re-read in the host's zone there, and 8pm Monday in Miami is already
+    // Tuesday in UTC — which selected the wrong week.
+    const weekStartKey = format(startOfWeek(weekStartDate, { weekStartsOn: 1 }), "yyyy-MM-dd");
 
     const [loading, setLoading] = useState(false);
 
@@ -63,7 +67,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
     const fetchPlan = async () => {
 
         setLoading(true);
-        const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
+        const plan = await getWeeklyPlan(weekStartKey, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
         setPlannedVisits(plan);
         setLoading(false);
 
@@ -223,7 +227,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
         setLoadingOptions(true);
 
-        const options = await getSchoolOptionsForWeek(id, weekStartDate.toISOString());
+        const options = await getSchoolOptionsForWeek(id, weekStartKey);
 
         setOptionsForAdd(options);
 
@@ -269,7 +273,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
         const updatedOverrides = [...manualOverrides, newOverride];
 
-        const plan = await getWeeklyPlan(weekStartDate.toISOString(), updatedOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
+        const plan = await getWeeklyPlan(weekStartKey, updatedOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
 
         setPlannedVisits(plan);
 
@@ -296,7 +300,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
             setLoading(true);
 
-            const plan = await getWeeklyPlan(weekStartDate.toISOString(), manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
+            const plan = await getWeeklyPlan(weekStartKey, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
 
             if (isMounted) {
 

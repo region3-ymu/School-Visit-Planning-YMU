@@ -33,6 +33,12 @@ export function formatTimeInAppZone(date: Date): string {
   return `${p.hour}:${p.minute}`;
 }
 
+/** Minutes past midnight in Miami — for comparing against a work window. */
+export function minutesOfDayInAppZone(date: Date): number {
+  const p = partsInZone(date);
+  return +p.hour * 60 + +p.minute;
+}
+
 /**
  * The calendar day in Miami, as "yyyy-MM-dd".
  *
@@ -43,4 +49,48 @@ export function formatTimeInAppZone(date: Date): string {
 export function dayKeyInAppZone(date: Date): string {
   const p = partsInZone(date);
   return `${p.year}-${p.month}-${p.day}`;
+}
+
+/** Milliseconds the app's zone is ahead of UTC at a given instant (negative here). */
+function zoneOffsetMs(date: Date): number {
+  const p = partsInZone(date);
+  const asIfUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, date.getUTCSeconds());
+  return asIfUtc - date.getTime();
+}
+
+/**
+ * The instant at which a Miami calendar day begins.
+ *
+ * Two passes because the offset is itself a function of the instant: on a
+ * spring-forward date the naive guess lands an hour off, and the second pass
+ * settles it.
+ */
+export function zonedDayStart(dayKey: string): Date {
+  const guess = new Date(`${dayKey}T00:00:00.000Z`);
+  const first = new Date(guess.getTime() - zoneOffsetMs(guess));
+  return new Date(guess.getTime() - zoneOffsetMs(first));
+}
+
+/** Calendar arithmetic on a "yyyy-MM-dd" key — no zone involved. */
+export function addDaysToDayKey(dayKey: string, days: number): string {
+  const d = new Date(`${dayKey}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** The Monday of the week containing `dayKey`. */
+export function mondayOfDayKey(dayKey: string): string {
+  const d = new Date(`${dayKey}T00:00:00.000Z`);
+  return addDaysToDayKey(dayKey, -((d.getUTCDay() + 6) % 7));
+}
+
+/**
+ * Reads whatever the client sent for "which week" as a Miami calendar day.
+ *
+ * A bare "yyyy-MM-dd" is already zone-free and is taken as-is. A full ISO
+ * instant is converted, which is what stops 9pm Miami — already tomorrow in
+ * UTC — from selecting next week.
+ */
+export function toAppZoneDayKey(input: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(input) ? input : dayKeyInAppZone(new Date(input));
 }

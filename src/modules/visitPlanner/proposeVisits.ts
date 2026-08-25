@@ -35,8 +35,15 @@
 
 import { PrismaClient } from "@prisma/client";
 import type { FrequencyType } from "@prisma/client";
-import { addDays, format, startOfWeek } from "date-fns";
-import { dayKeyInAppZone, formatTimeInAppZone } from "@/lib/timezone";
+import { startOfWeek } from "date-fns";
+import {
+  addDaysToDayKey,
+  dayKeyInAppZone,
+  formatTimeInAppZone,
+  minutesOfDayInAppZone,
+  mondayOfDayKey,
+  zonedDayStart,
+} from "@/lib/timezone";
 import type { LatLng } from "./distance/types";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { haversineMeters } from "@/lib/geo";
@@ -122,9 +129,15 @@ export async function proposeVisitsForWeek(
   const distanceService = options?.distanceService;
   const regionId = options?.regionId;
 
-  const weekStartNorm = startOfWeek(weekStart, { weekStartsOn: 1 });
-  const weekDates = Array.from({ length: 5 }, (_, i) => addDays(weekStartNorm, i));
-  const weekEnd = addDays(weekStartNorm, 5);
+  // Normalised through Miami rather than the host's zone: date-fns startOfWeek
+  // reads the same instant as a different weekday depending on where the code
+  // runs, which had this returning the previous week outside UTC. Day keys are
+  // stepped as calendar dates so a DST change can't drift the boundary either.
+  const weekStartKey = mondayOfDayKey(dayKeyInAppZone(weekStart));
+  const weekDayKeys = Array.from({ length: 5 }, (_, i) => addDaysToDayKey(weekStartKey, i));
+  const weekDates = weekDayKeys.map(zonedDayStart);
+  const weekStartNorm = weekDates[0];
+  const weekEnd = zonedDayStart(addDaysToDayKey(weekStartKey, 5));
   const currentWeek = getWeekNumber(weekStartNorm);
 
   // Fetch all data in parallel
@@ -253,7 +266,7 @@ export async function proposeVisitsForWeek(
     const visitRuleNote = rule?.reason ?? undefined;
 
     for (const day of weekDates) {
-      const dayStr = format(day, "yyyy-MM-dd");
+      const dayStr = dayKeyInAppZone(day);
       const key = `${school.id}:${dayStr}`;
       const sessions = sessionsBySchoolDay.get(key) ?? [];
 
@@ -263,8 +276,11 @@ export async function proposeVisitsForWeek(
       // choice is deferred to the clustering below.
       const daySessions = sessions
         .filter((s) => {
-          const startMins = s.startDateTime.getHours() * 60 + s.startDateTime.getMinutes();
-          const endMins = s.endDateTime.getHours() * 60 + s.endDateTime.getMinutes();
+          // Against the RM's working day in Miami. getHours() would read the
+          // host's clock, so the same class fell inside the window on one
+          // server and outside it on another.
+          const startMins = minutesOfDayInAppZone(s.startDateTime);
+          const endMins = minutesOfDayInAppZone(s.endDateTime);
           return isInWorkWindow(startMins, endMins, workWindow);
         })
         .sort((a, b) => a.startDateTime.getTime() - b.startDateTime.getTime());
@@ -355,7 +371,7 @@ export async function proposeVisitsForWeek(
   };
   type Stop = { candidate: Candidate; slot: Slot };
 
-  const minutesOf = (d: Date) => d.getHours() * 60 + d.getMinutes();
+  const minutesOf = (d: Date) => minutesOfDayInAppZone(d);
 
   const metresBetween = (a: Candidate, b: Candidate): number | null =>
     a.lat != null && a.lng != null && b.lat != null && b.lng != null
@@ -399,15 +415,15 @@ export async function proposeVisitsForWeek(
   const daysByOpportunity = [...weekDates].sort((a, b) => {
     if (isPast(a) !== isPast(b)) return isPast(a) ? 1 : -1;
 
-    const aCount = (candidatesByDay.get(format(a, "yyyy-MM-dd")) ?? []).length;
-    const bCount = (candidatesByDay.get(format(b, "yyyy-MM-dd")) ?? []).length;
+    const aCount = (candidatesByDay.get(dayKeyInAppZone(a)) ?? []).length;
+    const bCount = (candidatesByDay.get(dayKeyInAppZone(b)) ?? []).length;
     return bCount !== aCount ? bCount - aCount : a.getTime() - b.getTime();
   });
 
   for (const day of daysByOpportunity) {
     if (weeklyCount >= maxVisitsPerWeek) break;
 
-    const dayStr = format(day, "yyyy-MM-dd");
+    const dayStr = dayKeyInAppZone(day);
     const pool = (candidatesByDay.get(dayStr) ?? [])
       .filter((c) => !scheduledSchoolIds.has(c.schoolId))
       .sort((a, b) => b.score - a.score);
@@ -476,7 +492,7 @@ export async function proposeVisitsForWeek(
   const proposed: ProposedVisit[] = [];
 
   for (const day of weekDates) {
-    const dayStr = format(day, "yyyy-MM-dd");
+    const dayStr = dayKeyInAppZone(day);
     let selected = chosenByDay.get(dayStr) ?? [];
     if (selected.length === 0) continue;
 
