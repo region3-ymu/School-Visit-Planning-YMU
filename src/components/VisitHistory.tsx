@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    getMyDayStatus, getOfficeLocations,
+    getMyDayStatus, getOfficeLocations, getPreviousVisitToday,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car } from "lucide-react";
@@ -60,6 +60,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [gpsError, setGpsError] = useState<string | null>(null);
     const [gpsLoading, setGpsLoading] = useState(false);
     const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
+    // What the server will actually chain from for the date being logged. The
+    // origin picker only matters when this comes back empty — asking anyway made
+    // it look as though an earlier stop that day had been forgotten.
+    const [chainedFrom, setChainedFrom] = useState<string | null>(null);
+    const [chainLoading, setChainLoading] = useState(false);
 
     const [visitedWith, setVisitedWith] = useState<string[]>([]);
     const [principalNotes, setPrincipalNotes] = useState("");
@@ -123,6 +128,20 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     // A past date can't use "where I am now" as the origin — today's position says
     // nothing about where the RM drove from last Tuesday.
     const allowGps = isToday(new Date(visitDate + "T12:00:00"));
+    const visitIso = visitDate ? new Date(visitDate + "T12:00:00Z").toISOString() : null;
+
+    // Re-checked whenever the modal opens or its date changes, and again after a
+    // save, so logging a whole day in sequence shows each stop chaining onto the
+    // last instead of asking where you came from every time.
+    useEffect(() => {
+        if (!showModal || editingId || !visitIso) { setChainedFrom(null); return; }
+        let cancelled = false;
+        setChainLoading(true);
+        getPreviousVisitToday(visitIso)
+            .then((prev) => { if (!cancelled) setChainedFrom(prev?.label ?? null); })
+            .finally(() => { if (!cancelled) setChainLoading(false); });
+        return () => { cancelled = true; };
+    }, [showModal, editingId, visitIso]);
 
     const toggleVisitedWith = (value: string) =>
         setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -295,6 +314,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setEditingId(null);
         resetForm();
         setDayStatus(await getMyDayStatus(new Date().toISOString()));
+        setChainedFrom(null);
         await fetchHistory();
     };
 
@@ -604,10 +624,19 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
                                     {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
-                                    {!isRemote && (
+                                    {/* Already have a stop that day: say what it chains from rather
+                                        than asking a question whose answer the server ignores. */}
+                                    {!isRemote && chainedFrom && (
+                                        <div className="rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/40 p-3 text-sm text-gray-600 dark:text-gray-400">
+                                            Driving from your previous stop that day:{" "}
+                                            <span className="font-medium text-gray-800 dark:text-gray-200">{chainedFrom}</span>
+                                        </div>
+                                    )}
+
+                                    {!isRemote && !chainedFrom && !chainLoading && (
                                         <div>
                                             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                                                Where did you drive from?
+                                                First stop that day — where did you drive from?
                                             </p>
                                             <OriginPicker
                                                 mode={originMode}
@@ -626,8 +655,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 office={office}
                                             />
                                             <p className="text-xs text-gray-400 mt-1">
-                                                Only used if this is your first visit that day — later ones chain from the
-                                                previous school automatically.
+                                                Later stops that day chain from the previous school automatically.
                                             </p>
                                         </div>
                                     )}
