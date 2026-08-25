@@ -462,6 +462,12 @@ async function findPreviousVisitToday(
     where: {
       visitedById,
       status: "DONE",
+      // In-person only: a call or a video visit is somewhere you were, not
+      // somewhere you drove. Chaining through one billed the leg from wherever
+      // that school happens to be — a phone call to Air Base, thirty miles
+      // south, made the next stop look like a thirty-mile drive. The route
+      // editor already skipped them; this is the live path catching up.
+      mode: "IN_PERSON",
       plannedStartDateTime: { gte: dayStart, lt: dayEnd },
     },
     // By the stop's own slot, not by when it was typed in. Ordering on createdAt
@@ -479,10 +485,12 @@ async function findPreviousVisitToday(
 }
 
 /**
- * Whether confirming a visit on `dateIso` would be the RM's first of the
- * day (in which case the UI should ask where they're starting from) or a
- * later one (mileage auto-chains from the previous confirmed visit, no
- * question needed). Returns the previous stop's name when chaining applies.
+ * Whether confirming a visit on `dateIso` would be the RM's first *drive* of
+ * the day — in which case the UI asks where they're starting from — or a later
+ * one, where mileage chains from the previous stop and no question is needed.
+ *
+ * A day of nothing but calls has no previous stop, so the next in-person visit
+ * is still asked for its origin.
  */
 export async function getPreviousVisitToday(dateIso: string): Promise<{ label: string } | null> {
   const session = await auth();
