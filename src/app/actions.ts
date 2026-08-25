@@ -17,6 +17,7 @@ import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClien
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { haversineMeters } from "@/lib/geo";
+import { dayKeyInAppZone, formatTimeInAppZone } from "@/lib/timezone";
 import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
@@ -303,10 +304,10 @@ export async function getSchoolOptionsForWeek(
   for (const s of sessions) {
     if (isAfterschool(s.subject?.name ?? "")) continue;
     addOption({
-      date: format(s.startDateTime, "yyyy-MM-dd"),
+      date: dayKeyInAppZone(s.startDateTime),
       rule: {
-        start: format(s.startDateTime, "HH:mm"),
-        end: format(s.endDateTime, "HH:mm"),
+        start: formatTimeInAppZone(s.startDateTime),
+        end: formatTimeInAppZone(s.endDateTime),
         class: s.subject.name,
       },
     });
@@ -347,10 +348,10 @@ export async function getSchoolCalendarOptionsForWeek(
   return sessions
     .filter((s) => !isAfterschool(s.subject?.name ?? ""))
     .map((s) => ({
-      date: format(s.startDateTime, "yyyy-MM-dd"),
+      date: dayKeyInAppZone(s.startDateTime),
       rule: {
-        start: format(s.startDateTime, "HH:mm"),
-        end: format(s.endDateTime, "HH:mm"),
+        start: formatTimeInAppZone(s.startDateTime),
+        end: formatTimeInAppZone(s.endDateTime),
         class: s.subject.name,
       },
     }));

@@ -36,6 +36,7 @@
 import { PrismaClient } from "@prisma/client";
 import type { FrequencyType } from "@prisma/client";
 import { addDays, format, startOfWeek } from "date-fns";
+import { dayKeyInAppZone, formatTimeInAppZone } from "@/lib/timezone";
 import type { LatLng } from "./distance/types";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { haversineMeters } from "@/lib/geo";
@@ -73,6 +74,12 @@ function observationWindows(start: Date, end: Date): { start: Date; end: Date }[
   ];
 }
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Stand-in "days since last visit" for a school with no visit on record, big
+ * enough to outrank any real gap when candidates are scored. Never shown.
+ */
+const NEVER_VISITED_RANK = 999;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
 function getWeekNumber(date: Date): number {
@@ -174,7 +181,7 @@ export async function proposeVisitsForWeek(
   const sessionsBySchoolDay = new Map<string, typeof classSessionsInWeek[number][]>();
   for (const s of classSessionsInWeek) {
     if (isAfterschool(s.subject?.name ?? "")) continue;
-    const key = `${s.schoolId}:${format(s.startDateTime, "yyyy-MM-dd")}`;
+    const key = `${s.schoolId}:${dayKeyInAppZone(s.startDateTime)}`;
     if (!sessionsBySchoolDay.has(key)) sessionsBySchoolDay.set(key, []);
     sessionsBySchoolDay.get(key)!.push(s);
   }
@@ -230,9 +237,13 @@ export async function proposeVisitsForWeek(
     // school teaches at all this week, the days it doesn't can be dropped.
     const schoolCandidates: Candidate[] = [];
 
+    // A school with no visit on record ranks above any merely-overdue one. The
+    // number is a sort key, not a duration — reading it as one is what produced
+    // "Overdue by 985 days" on screen for a school nobody had ever been to.
+    const neverVisited = lastVisit == null;
     const daysSinceLast = lastVisit
       ? Math.floor((today.getTime() - lastVisit.getTime()) / MS_PER_DAY)
-      : 999;
+      : NEVER_VISITED_RANK;
     const freqDays = getFrequencyDays(freq);
     const isOverdue = daysSinceLast >= freqDays;
     const baseScore = isOverdue
@@ -262,10 +273,12 @@ export async function proposeVisitsForWeek(
       const hasClass = bestSession !== undefined;
       const score = baseScore + (hasClass ? CLASS_SCORE_BONUS : 0);
 
-      const reasonText = isOverdue
-        ? `Overdue by ${daysSinceLast - freqDays} days`
-        : daysSinceLast >= 90
-          ? "Action Required (Never Visited)"
+      // Never-visited is checked first: it is also "overdue", and letting that
+      // branch win meant this message was unreachable.
+      const reasonText = neverVisited
+        ? "Never visited"
+        : isOverdue
+          ? `Overdue by ${daysSinceLast - freqDays} days`
           : `Due in ${freqDays - daysSinceLast} days`;
 
       const candidate: Candidate = {
@@ -276,8 +289,8 @@ export async function proposeVisitsForWeek(
         lat: school.lat ?? null,
         lng: school.lng ?? null,
         date: hasClass ? bestSession.startDateTime : new Date(`${dayStr}T09:00:00`),
-        startTime: hasClass ? format(bestSession.startDateTime, "HH:mm") : "09:00",
-        endTime: hasClass ? format(bestSession.endDateTime, "HH:mm") : "10:00",
+        startTime: hasClass ? formatTimeInAppZone(bestSession.startDateTime) : "09:00",
+        endTime: hasClass ? formatTimeInAppZone(bestSession.endDateTime) : "10:00",
         score,
         reason: reasonText,
         subjectName: bestSession?.subject?.name,
@@ -450,10 +463,10 @@ export async function proposeVisitsForWeek(
       cluster.map(({ candidate, slot }) => ({
         ...candidate,
         date: slot.start,
-        startTime: format(slot.start, "HH:mm"),
-        endTime: format(slot.end, "HH:mm"),
-        classStartTime: format(slot.classStart, "HH:mm"),
-        classEndTime: format(slot.classEnd, "HH:mm"),
+        startTime: formatTimeInAppZone(slot.start),
+        endTime: formatTimeInAppZone(slot.end),
+        classStartTime: formatTimeInAppZone(slot.classStart),
+        classEndTime: formatTimeInAppZone(slot.classEnd),
         subjectName: slot.subjectName,
       }))
     );
