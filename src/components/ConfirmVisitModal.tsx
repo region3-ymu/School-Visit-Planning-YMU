@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, MapPin, AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { X, MapPin, AlertTriangle, CheckCircle2, Clock, Loader2 } from "lucide-react";
+import { isToday } from "date-fns";
 import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
 import { haversineMeters } from "@/lib/geo";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
@@ -57,6 +58,11 @@ export default function ConfirmVisitModal({
   const [mode, setMode] = useState<"IN_PERSON" | "ONLINE" | "PHONE">("IN_PERSON");
   const isRemote = mode !== "IN_PERSON";
 
+  // Confirming a visit from an earlier day. Where the phone is now says nothing
+  // about that day, so neither the geofence nor "current location" as an origin
+  // means anything — the same rule the manual Log Visit form already applied.
+  const isBackdated = !isToday(visitDate);
+
   const [geofenceStatus, setGeofenceStatus] = useState<GeofenceStatus>("checking");
   const [geofenceDistanceM, setGeofenceDistanceM] = useState<number | null>(null);
   const [geofenceError, setGeofenceError] = useState<string | null>(null);
@@ -89,6 +95,7 @@ export default function ConfirmVisitModal({
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isBackdated) return;
     if (!navigator.geolocation) {
       setGeofenceStatus("error");
       setGeofenceError("Geolocation is not supported by this browser");
@@ -112,7 +119,7 @@ export default function ConfirmVisitModal({
       },
       { enableHighAccuracy: true, timeout: 15000 }
     );
-  }, [schoolLat, schoolLng]);
+  }, [schoolLat, schoolLng, isBackdated]);
 
   useEffect(() => {
     getPreviousVisitToday(visitDate.toISOString()).then((prev) => {
@@ -150,10 +157,12 @@ export default function ConfirmVisitModal({
           ? !!office
           : !!customAddress.trim();
 
+  const hasStartingPoint = chainState.status !== "needs-input" || hasOrigin;
   const canConfirm =
     isRemote ||
-    ((geofenceStatus === "ok" || overrideGeofence) &&
-      (chainState.status !== "needs-input" || hasOrigin));
+    (isBackdated
+      ? hasStartingPoint
+      : (geofenceStatus === "ok" || overrideGeofence) && hasStartingPoint);
 
   const toggleVisitedWith = (value: string) => {
     setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -215,8 +224,8 @@ export default function ConfirmVisitModal({
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
         hasInstrumentRequest,
         instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
-        geofenceDistanceM: isRemote ? undefined : geofenceDistanceM ?? undefined,
-        geofenceOverridden: isRemote ? false : geofenceStatus !== "ok",
+        geofenceDistanceM: isRemote || isBackdated ? undefined : geofenceDistanceM ?? undefined,
+        geofenceOverridden: isRemote ? false : isBackdated || geofenceStatus !== "ok",
         // A skipped observation carries a reason instead of ratings, never both.
         obsPlanningPrep: skippedObs ? undefined : observations.obsPlanningPrep ?? undefined,
         obsCultureManagement: skippedObs ? undefined : observations.obsCultureManagement ?? undefined,
@@ -289,8 +298,17 @@ export default function ConfirmVisitModal({
 
           {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
+          {/* A backdated confirmation can't be location-checked; it is recorded
+              as unverified rather than pretending otherwise. */}
+          {!isRemote && isBackdated && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm flex items-start gap-2 text-amber-700 dark:text-amber-400">
+              <Clock size={16} className="shrink-0 mt-0.5" />
+              <p>Logging an earlier day, so your location isn&apos;t checked and is recorded as unverified.</p>
+            </div>
+          )}
+
           {/* Geofence status */}
-          {!isRemote && (
+          {!isRemote && !isBackdated && (
           <div
             className={`rounded-lg border p-3 text-sm flex items-start gap-2 ${
               geofenceStatus === "ok"
@@ -365,7 +383,7 @@ export default function ConfirmVisitModal({
                 gpsError={gpsError}
                 gpsLoading={geofenceStatus === "checking" && !gpsCoords && !gpsError}
                 onRequestGps={() => {}}
-                allowGps
+                allowGps={!isBackdated}
                 office={office}
               />
             </div>
