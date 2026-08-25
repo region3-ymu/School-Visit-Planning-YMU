@@ -26,14 +26,14 @@ export const EMPTY_OBSERVATIONS: ObservationState = {
   obsProfessionalismGrowth: null,
 };
 
-const RATING_OPTIONS: { value: ObservationRating; label: string }[] = [
+export const RATING_OPTIONS: { value: ObservationRating; label: string }[] = [
   { value: "NEEDS_SUPPORT", label: "Needs support" },
   { value: "DEVELOPING", label: "Developing" },
   { value: "MEETS", label: "Meets" },
   { value: "EXCEEDS", label: "Exceeds" },
 ];
 
-const OBSERVATION_DOMAINS: { key: ObservationDomainKey; title: string; hint: string }[] = [
+export const OBSERVATION_DOMAINS: { key: ObservationDomainKey; title: string; hint: string }[] = [
   { key: "obsPlanningPrep", title: "Planning & preparation", hint: "Objectives, materials, pacing" },
   { key: "obsCultureManagement", title: "Culture & management", hint: "Routines, relationships, transitions" },
   { key: "obsInstructionMusicianship", title: "Instruction & musicianship", hint: "Modeling, feedback, skill building" },
@@ -41,7 +41,7 @@ const OBSERVATION_DOMAINS: { key: ObservationDomainKey; title: string; hint: str
   { key: "obsProfessionalismGrowth", title: "Professionalism & growth", hint: "Communication, reliability, reflection" },
 ];
 
-const SKIP_REASONS: { value: ObservationSkipReason; label: string }[] = [
+export const SKIP_REASONS: { value: ObservationSkipReason; label: string }[] = [
   { value: "NO_CLASS_TODAY", label: "No class today" },
   { value: "CLASS_CANCELLED", label: "Class cancelled" },
   { value: "TEACHER_ABSENT", label: "Teacher absent" },

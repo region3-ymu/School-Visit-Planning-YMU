@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
     getMyDayStatus, getOfficeLocations, getPreviousVisitToday,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
-import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car } from "lucide-react";
+import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronRight } from "lucide-react";
+import VisitDetails from "./visit/VisitDetails";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
@@ -78,6 +79,8 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
     type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
     const [office, setOffice] = useState<Office | null>(null);
+
+    const [expandedId, setExpandedId] = useState<string | null>(null);
 
     const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
 
@@ -430,6 +433,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                         <table className="w-full text-left text-sm">
                             <thead className="bg-gray-50 dark:bg-zinc-800/50 text-gray-600 dark:text-gray-300">
                                 <tr>
+                                    <th className="px-2 py-4 w-8" />
                                     <th className="px-6 py-4 font-semibold">Date</th>
                                     <th className="px-6 py-4 font-semibold">School</th>
                                     <th className="px-6 py-4 font-semibold">Reimbursable</th>
@@ -441,13 +445,20 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             <tbody className="divide-y divide-gray-100 dark:divide-zinc-800">
                                 {filteredHistory.length === 0 ? (
                                     <tr>
-                                        <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                                        <td colSpan={7} className="px-6 py-12 text-center text-gray-500">
                                             No visit history found for this period.
                                         </td>
                                     </tr>
                                 ) : (
                                     filteredHistory.map((log) => (
-                                        <tr key={log.id} className="hover:bg-gray-50/50 dark:hover:bg-zinc-800/30 transition-colors">
+                                        <Fragment key={log.id}>
+                                        <tr
+                                            className="hover:bg-gray-50/50 dark:hover:bg-zinc-800/30 transition-colors cursor-pointer"
+                                            onClick={() => setExpandedId(expandedId === log.id ? null : log.id)}
+                                        >
+                                            <td className="px-2 py-4 text-gray-400">
+                                                {expandedId === log.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                                            </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">
                                                 {format(new Date(log.date), "MMM d, yyyy")}
                                             </td>
@@ -495,7 +506,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                     <CheckCircle size={12} className="mr-1" /> Completed
                                                 </span>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-right">
+                                            <td className="px-6 py-4 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
                                                 <button onClick={() => handleOpenEdit(log)} className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 mr-3">
                                                     <Edit2 size={16} />
                                                 </button>
@@ -504,6 +515,14 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 </button>
                                             </td>
                                         </tr>
+                                        {expandedId === log.id && (
+                                            <tr>
+                                                <td colSpan={7} className="p-0">
+                                                    <VisitDetails visit={log} />
+                                                </td>
+                                            </tr>
+                                        )}
+                                        </Fragment>
                                     ))
                                 )}
                             </tbody>

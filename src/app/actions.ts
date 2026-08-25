@@ -710,7 +710,10 @@ export async function getVisitHistory(regionFilter?: string | null) {
           }
         : {}),
     },
-    include: { school: { include: { region: { select: { name: true } } } } },
+    include: {
+      school: { include: { region: { select: { name: true } } } },
+      visitedBy: { select: { name: true, email: true } },
+    },
     orderBy: { plannedStartDateTime: "desc" },
   });
 
@@ -723,6 +726,25 @@ export async function getVisitHistory(regionFilter?: string | null) {
     school: v.school,
     mode: v.mode,
     vehicle: v.vehicle,
+    // The visit form's own record: who was seen, what was discussed, how the
+    // teacher was rated. Written since the form existed but never read back, so
+    // none of it was visible anywhere.
+    visitedWith: v.visitedWith,
+    principalNotes: v.principalNotes,
+    observations: {
+      obsPlanningPrep: v.obsPlanningPrep,
+      obsCultureManagement: v.obsCultureManagement,
+      obsInstructionMusicianship: v.obsInstructionMusicianship,
+      obsEngagementEvidence: v.obsEngagementEvidence,
+      obsProfessionalismGrowth: v.obsProfessionalismGrowth,
+    },
+    obsNotes: v.obsNotes,
+    obsSkipReason: v.obsSkipReason,
+    obsSkipNotes: v.obsSkipNotes,
+    hasInstrumentRequest: v.hasInstrumentRequest,
+    instrumentRequestDetails: v.instrumentRequestDetails,
+    geofenceOverridden: v.geofenceOverridden,
+    visitedByName: v.visitedBy?.name ?? v.visitedBy?.email ?? null,
     // Decimal doesn't survive the server/client boundary.
     milesDriven: decimalToNumber(v.milesDriven),
     returnMilesDriven: decimalToNumber(v.returnMilesDriven),
