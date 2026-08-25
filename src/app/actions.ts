@@ -158,6 +158,32 @@ export async function getOfficeLocations() {
   return offices.filter((o) => o.lat != null && o.lng != null);
 }
 
+/**
+ * The school's coordinates, straight from the database.
+ *
+ * The confirm modal used to trust whatever lat/lng the plan item carried, and
+ * a plan item can arrive without them — from a pinned visit, from a plan
+ * rehydrated out of localStorage by an older build, from any future code that
+ * builds a VisitInfo and forgets. The result was a modal announcing "this
+ * school has no saved location" about a school whose address has been on file
+ * all along, which reads as broken data and undermines every mileage figure
+ * the app reports.
+ *
+ * So the geofence asks the server. There is one authority for where a school
+ * is, and it is this row.
+ */
+export async function getSchoolLocation(schoolId: string) {
+  const session = await auth();
+  requireUser(session);
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: { lat: true, lng: true },
+  });
+  if (!school || school.lat == null || school.lng == null) return null;
+  return { lat: school.lat, lng: school.lng };
+}
+
 export async function getWeeklyPlan(
   weekStartDateIso: string,
   manualOverrides: Partial<VisitInfo>[] = [],
@@ -221,6 +247,11 @@ export async function getWeeklyPlan(
           schoolId: school.id,
           schoolName: school.name,
           zipCode: school.zipCode,
+          // The whole school row is in hand here; dropping its coordinates is
+          // what made a pinned visit open the confirm modal with no geofence
+          // target and claim the school had no saved location.
+          lat: school.lat ?? undefined,
+          lng: school.lng ?? undefined,
           date: new Date(o.date),
           score: 1000,
           reason: "Pinned manually",
@@ -254,6 +285,8 @@ export async function getWeeklyPlan(
       schoolId: v.schoolId,
       schoolName: v.school.name,
       zipCode: v.school.zipCode,
+      lat: v.school.lat ?? undefined,
+      lng: v.school.lng ?? undefined,
       date: d,
       score: 0,
       reason: v.reason ?? "Completed",

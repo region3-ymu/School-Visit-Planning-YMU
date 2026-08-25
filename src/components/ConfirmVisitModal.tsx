@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { X, MapPin, AlertTriangle, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { isToday } from "date-fns";
-import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
+import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations, getSchoolLocation } from "@/app/actions";
 import { haversineMeters } from "@/lib/geo";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
@@ -106,25 +106,51 @@ export default function ConfirmVisitModal({
       setGeofenceError("Geolocation is not supported by this browser");
       return;
     }
+    let cancelled = false;
+
+    // Asked for up front, in parallel with the GPS fix, so it costs nothing:
+    // the browser takes seconds to answer, the database takes milliseconds.
+    //
+    // The props are only a hint. Where a school IS lives in one place — its
+    // row — and the plan item that opened this modal is not that place: a
+    // pinned visit or a plan rehydrated from localStorage by an older build
+    // can arrive without coordinates, and then this screen told a Regional
+    // Manager that a school with a perfectly good address on file had no
+    // saved location. Falling back to the props keeps the check working if
+    // the lookup itself fails.
+    const targetPromise = getSchoolLocation(schoolId).catch(() => null);
+
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
+      async (pos) => {
+        if (cancelled) return;
         setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        if (schoolLat == null || schoolLng == null) {
+
+        const stored = await targetPromise;
+        if (cancelled) return;
+        const target =
+          stored ??
+          (schoolLat != null && schoolLng != null ? { lat: schoolLat, lng: schoolLng } : null);
+        if (!target) {
           setGeofenceStatus("no-target");
           return;
         }
-        const distance = haversineMeters(pos.coords.latitude, pos.coords.longitude, schoolLat, schoolLng);
+        const distance = haversineMeters(pos.coords.latitude, pos.coords.longitude, target.lat, target.lng);
         setGeofenceDistanceM(distance);
         setGeofenceStatus(distance <= GEOFENCE_RADIUS_M ? "ok" : "far");
       },
       (err) => {
+        if (cancelled) return;
         setGeofenceStatus("error");
         setGeofenceError(err.message || "Could not get GPS location");
         setGpsError(err.message || "Could not get GPS location");
       },
       { enableHighAccuracy: true, timeout: 15000 }
     );
-  }, [schoolLat, schoolLng, isBackdated]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [schoolId, schoolLat, schoolLng, isBackdated]);
 
   useEffect(() => {
     getPreviousVisitToday(visitDate.toISOString()).then((prev) => {
