@@ -1219,9 +1219,19 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
  * they are unioned in.
  */
 export async function getSchoolTeachers(schoolId: string) {
+  // Last year's classes are still in the database. Counting them here would
+  // credit a teacher with a school they no longer serve, and inflate the class
+  // counts with a year nobody is planning against.
+  const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+  const yearStart = firstQuarter?.startDate;
+
   const [sessions, byField] = await Promise.all([
     prisma.classSession.findMany({
-      where: { schoolId, teacherId: { not: null } },
+      where: {
+        schoolId,
+        teacherId: { not: null },
+        ...(yearStart ? { startDateTime: { gte: yearStart } } : {}),
+      },
       select: {
         teacher: { select: { id: true, name: true, email: true, subjects: true, externalId: true } },
         subject: { select: { name: true } },

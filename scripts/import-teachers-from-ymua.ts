@@ -38,6 +38,21 @@ const SUPABASE_KEY = process.env.YMUA_SUPABASE_SERVICE_ROLE_KEY;
 const PAGE = 1000;
 const REVIEW_FILE = "ymua-teacher-import-review.csv";
 
+/**
+ * Only the current school year is filled in beyond what YMU-A states.
+ *
+ * Last year's sessions are still in the database and their events mostly carry
+ * no teacher — that isn't a gap to be repaired, it is simply how far back the
+ * teacher matching goes. Guessing at them writes a name onto a class somebody
+ * else may well have taught. Taken from the earliest quarter on record, so it
+ * follows the calendar rather than a date baked in here.
+ */
+async function currentYearStart(): Promise<Date> {
+  const q = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+  if (!q) throw new Error("No quarters seeded — run scripts/seed-quarters.ts first");
+  return q.startDate;
+}
+
 type Profile = { id: string; full_name: string; role: string; subjects: string[] | null; archived_at: string | null };
 type Event = { google_event_id: string; teacher_ids: string[] | null };
 
@@ -72,10 +87,12 @@ async function main() {
   const teacherIdsByEvent = new Map(events.map((e) => [e.google_event_id, e.teacher_ids ?? []]));
   console.log(`YMU-A: ${profiles.length} profiles, ${events.length} calendar events`);
 
+  const yearStart = await currentYearStart();
   const sessions = await prisma.classSession.findMany({
-    select: { id: true, googleEventId: true, schoolId: true, teacherId: true },
+    select: { id: true, googleEventId: true, schoolId: true, teacherId: true, startDateTime: true },
   });
-  console.log(`Local: ${sessions.length} class sessions\n`);
+  const thisYear = sessions.filter((s) => s.startDateTime >= yearStart);
+  console.log(`Local: ${sessions.length} class sessions (${thisYear.length} since ${yearStart.toISOString().slice(0, 10)})\n`);
 
   // Which YMU-A teacher owns each local session, and which schools each teaches at.
   const assignment = new Map<string, string>(); // sessionId -> profileId
@@ -163,21 +180,30 @@ async function main() {
   }
   console.log(`Class sessions relinked: ${relinked}`);
 
-  // Second pass: fill the gaps within a recurring class.
+  // Second pass: fill the gaps within a recurring class, this year only.
   //
-  // YMU-A matches a teacher per event instance, from the attendee list, and that
-  // matching is uneven across a series — Morningside's Music Production has Omar
-  // Cuellar on some dates and nobody on others, though it is one weekly class
-  // with one teacher. Where a (school, subject) group already has a real teacher
-  // on some of its sessions, the rest of that group is the same class.
+  // A handful of instances in a series can come through without a teacher even
+  // when the rest of the series names one. Where a (school, subject) group
+  // already has a real teacher on some of its sessions this year, the rest of
+  // that group is the same weekly class.
+  //
+  // Bounded to the current year deliberately. Last year's events largely have no
+  // teacher at all, and filling those in from this year's roster asserts that
+  // whoever teaches a class now also taught it then — which nothing here knows.
   const groups = await prisma.classSession.groupBy({
     by: ["schoolId", "subjectId"],
+    where: { startDateTime: { gte: yearStart } },
     _count: { id: true },
   });
   let inferred = 0;
   for (const g of groups) {
     const known = await prisma.classSession.findFirst({
-      where: { schoolId: g.schoolId, subjectId: g.subjectId, teacher: { externalId: { not: null } } },
+      where: {
+        schoolId: g.schoolId,
+        subjectId: g.subjectId,
+        startDateTime: { gte: yearStart },
+        teacher: { externalId: { not: null } },
+      },
       select: { teacherId: true },
     });
     if (!known?.teacherId) continue;
@@ -185,6 +211,7 @@ async function main() {
       where: {
         schoolId: g.schoolId,
         subjectId: g.subjectId,
+        startDateTime: { gte: yearStart },
         OR: [{ teacherId: null }, { teacher: { externalId: null } }],
       },
       data: { teacherId: known.teacherId },
@@ -193,13 +220,31 @@ async function main() {
   }
   console.log(`Sessions filled in from the rest of their recurring class: ${inferred}`);
 
+  // Undo any earlier over-reach: before the cutoff, a session says exactly what
+  // YMU-A says and nothing more.
+  const stale = await prisma.classSession.findMany({
+    where: { startDateTime: { lt: yearStart }, teacher: { externalId: { not: null } } },
+    select: { id: true, googleEventId: true },
+  });
+  let cleared = 0;
+  for (const s of stale) {
+    const ids = teacherIdsByEvent.get(s.googleEventId) ?? [];
+    if (ids.some((id) => profileById.has(id))) continue;
+    await prisma.classSession.update({ where: { id: s.id }, data: { teacherId: null } });
+    cleared++;
+  }
+  if (cleared > 0) console.log(`Last year's sessions cleared back to what YMU-A states: ${cleared}`);
+
   const stillUnknown = await prisma.classSession.groupBy({
     by: ["schoolId", "subjectId"],
-    where: { OR: [{ teacherId: null }, { teacher: { externalId: null } }] },
+    where: {
+      startDateTime: { gte: yearStart },
+      OR: [{ teacherId: null }, { teacher: { externalId: null } }],
+    },
     _count: { id: true },
   });
   if (stillUnknown.length > 0) {
-    console.log(`\nClasses with no teacher anywhere in their series — needs a person named in YMU-A:`);
+    console.log(`\nThis year's classes with no teacher anywhere in their series — needs a person named in YMU-A:`);
     for (const u of stillUnknown) {
       const [sc, su] = await Promise.all([
         prisma.school.findUnique({ where: { id: u.schoolId }, select: { name: true } }),
