@@ -459,7 +459,12 @@ async function findPreviousVisitToday(
       status: "DONE",
       plannedStartDateTime: { gte: dayStart, lt: dayEnd },
     },
-    orderBy: { createdAt: "desc" },
+    // By the stop's own slot, not by when it was typed in. Ordering on createdAt
+    // meant the route was whatever order someone happened to enter it in, and a
+    // stop remembered late landed at the end of the day no matter when it
+    // actually happened. createdAt only breaks ties among older rows that all
+    // share a slot.
+    orderBy: [{ plannedStartDateTime: "desc" }, { createdAt: "desc" }],
     select: { school: { select: { name: true, lat: true, lng: true } } },
   });
   if (prevVisit?.school.lat != null && prevVisit.school.lng != null) {
@@ -532,6 +537,23 @@ async function resolveVisitOrigin(
 
 const METERS_PER_MILE = 1609.344;
 
+/** The day's stops sit on hourly slots from 9am Miami, which is what orders them. */
+const DAY_FIRST_SLOT_HOUR = 9;
+const SLOT_MS = 3600_000;
+
+async function nextSlotForDay(visitedById: string, dayKey: string): Promise<Date> {
+  const dayStart = zonedDayStart(dayKey);
+  const dayEnd = new Date(zonedDayStart(addDaysToDayKey(dayKey, 1)).getTime() - 1);
+  const count = await prisma.visit.count({
+    where: {
+      visitedById,
+      status: "DONE",
+      plannedStartDateTime: { gte: dayStart, lt: dayEnd },
+    },
+  });
+  return new Date(dayStart.getTime() + (DAY_FIRST_SLOT_HOUR + count) * SLOT_MS);
+}
+
 /**
  * How close an origin has to be to the RM's saved home to count as starting from
  * home. Generous enough to absorb geocoder disagreement between two spellings of
@@ -583,8 +605,10 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   // the wrong day on a UTC server.
   const date = new Date(dateIso);
   const dayKey = dayKeyInAppZone(date);
-  const plannedStart = new Date(zonedDayStart(dayKey).getTime() + 9 * 3600_000);
-  const plannedEnd = new Date(plannedStart.getTime() + 3600_000);
+  // Each stop gets the next slot of the day, which is what puts the route in
+  // order and lets it be reordered later.
+  const plannedStart = await nextSlotForDay(user.id, dayKey);
+  const plannedEnd = new Date(plannedStart.getTime() + SLOT_MS);
   const { dayStart, dayEnd } = dayRangeFor(date);
 
   // Mileage is auto-derived from the RM's own route order that day (previous
@@ -595,6 +619,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   // milesDriven unset.
   let milesDriven: number | null = null;
   let originLabel: string | null = null;
+  let originLat: number | null = null;
+  let originLng: number | null = null;
   let commuteMiles: number | null = null;
 
   // A remote visit has no leg to measure. Leaving milesDriven null (rather than
@@ -606,6 +632,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
       const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
       if (origin) {
         originLabel = origin.label;
+        originLat = origin.lat;
+        originLng = origin.lng;
         milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
         // Home to the first school is the morning commute, not business mileage.
         if (origin.isCommute && milesDriven != null) commuteMiles = milesDriven;
@@ -638,6 +666,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         milesDriven: milesDriven ?? undefined,
         commuteMiles: commuteMiles ?? undefined,
         originLabel: originLabel ?? undefined,
+        originLat: originLat ?? undefined,
+        originLng: originLng ?? undefined,
         visitedWith: data.visitedWith,
         principalNotes: data.principalNotes ?? undefined,
         hasInstrumentRequest: data.hasInstrumentRequest,
@@ -797,11 +827,9 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
   });
   if (!school) throw new Error("School not found");
 
-  const date = new Date(dateIso);
-  const plannedStart = new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
-  );
-  const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  const dayKey = toAppZoneDayKey(dateIso);
+  const plannedStart = await nextSlotForDay(user.id, dayKey);
+  const plannedEnd = new Date(plannedStart.getTime() + SLOT_MS);
   const { dayStart, dayEnd } = dayRangeFor(plannedStart);
 
   // Same rules as a planner-confirmed visit: chain from the previous stop that
@@ -810,12 +838,16 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
   const isRemote = data.mode !== "IN_PERSON";
   let milesDriven: number | null = null;
   let originLabel: string | null = null;
+  let originLat: number | null = null;
+  let originLng: number | null = null;
   let commuteMiles: number | null = null;
 
   if (!isRemote && school.lat != null && school.lng != null) {
     const origin = await resolveVisitOrigin(user.id, dayStart, dayEnd, data.origin);
     if (origin) {
       originLabel = origin.label;
+      originLat = origin.lat;
+      originLng = origin.lng;
       milesDriven = await computeLegMiles(origin, { lat: school.lat, lng: school.lng });
       if (origin.isCommute && milesDriven != null) commuteMiles = milesDriven;
     }
@@ -838,6 +870,8 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       milesDriven: milesDriven ?? undefined,
       commuteMiles: commuteMiles ?? undefined,
       originLabel: originLabel ?? undefined,
+      originLat: originLat ?? undefined,
+      originLng: originLng ?? undefined,
       visitedWith: data.visitedWith,
       principalNotes: data.principalNotes ?? undefined,
       hasInstrumentRequest: data.hasInstrumentRequest,
@@ -913,6 +947,152 @@ export async function getMyDayStatus(dateIso: string) {
     totalMiles: drivenMiles - commuteMiles,
     vanMiles: van.reduce((sum, v) => sum + drivenOf(v), 0),
   };
+}
+
+/**
+ * The RM's stops for one day, in route order, for reviewing or reordering.
+ */
+export async function getDayRoute(dateIso: string) {
+  const session = await auth();
+  const user = requireUser(session);
+  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
+
+  const visits = await prisma.visit.findMany({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      plannedStartDateTime: { gte: dayStart, lt: dayEnd },
+    },
+    orderBy: [{ plannedStartDateTime: "asc" }, { createdAt: "asc" }],
+    include: { school: { select: { name: true, lat: true, lng: true } } },
+  });
+
+  return visits.map((v, i) => ({
+    id: v.id,
+    position: i + 1,
+    schoolName: v.school.name,
+    mode: v.mode,
+    milesDriven: decimalToNumber(v.milesDriven),
+    commuteMiles: decimalToNumber(v.commuteMiles),
+    originLabel: v.originLabel,
+  }));
+}
+
+/**
+ * Reorders a day's stops and reprices the whole day from its original starting
+ * point.
+ *
+ * Remembering a stop late, or in the wrong order, used to leave every following
+ * leg measured from the wrong school with no way to correct it — the only remedy
+ * was deleting the day and retyping every note. Each leg is recomputed from the
+ * stop now in front of it; the day's first leg keeps the origin the day actually
+ * started from, which reordering does not change.
+ *
+ * `orderedIds` must name exactly the day's stops. Anything else is rejected
+ * rather than partly applied.
+ */
+export async function reorderDayVisits(dateIso: string, orderedIds: string[]) {
+  const session = await auth();
+  const user = requireUser(session);
+  const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
+  const dayKey = dayKeyInAppZone(new Date(dateIso));
+
+  const existing = await prisma.visit.findMany({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      plannedStartDateTime: { gte: dayStart, lt: dayEnd },
+    },
+    orderBy: [{ plannedStartDateTime: "asc" }, { createdAt: "asc" }],
+    include: { school: { select: { name: true, lat: true, lng: true } } },
+  });
+
+  const existingIds = new Set(existing.map((v) => v.id));
+  if (orderedIds.length !== existing.length || !orderedIds.every((id) => existingIds.has(id))) {
+    throw new Error("The new order must list exactly this day's visits.");
+  }
+
+  const byId = new Map(existing.map((v) => [v.id, v]));
+  const ordered = orderedIds.map((id) => byId.get(id)!);
+
+  // The day began where it began; putting a different stop first doesn't change
+  // where the RM set out from, so that origin carries over to whoever is first.
+  const dayOrigin = existing.find((v) => v.originLat != null && v.originLng != null);
+  const startPoint =
+    dayOrigin?.originLat != null && dayOrigin.originLng != null
+      ? { lat: dayOrigin.originLat, lng: dayOrigin.originLng, label: dayOrigin.originLabel ?? "Start" }
+      : null;
+  const startIsCommute = (dayOrigin?.commuteMiles ?? null) != null;
+
+  const updates: {
+    id: string;
+    plannedStartDateTime: Date;
+    plannedEndDateTime: Date;
+    milesDriven: number | null;
+    commuteMiles: number | null;
+    originLabel: string | null;
+    originLat: number | null;
+    originLng: number | null;
+  }[] = [];
+
+  let prev: { lat: number; lng: number; label: string } | null = startPoint;
+  let isFirstDriven = true;
+
+  for (let i = 0; i < ordered.length; i++) {
+    const v = ordered[i];
+    const slotStart = new Date(zonedDayStart(dayKey).getTime() + (DAY_FIRST_SLOT_HOUR + i) * SLOT_MS);
+
+    // A remote stop is part of the day's order but breaks no chain: it neither
+    // consumes the origin nor becomes the next stop's starting point.
+    if (v.mode !== "IN_PERSON" || v.school.lat == null || v.school.lng == null) {
+      updates.push({
+        id: v.id,
+        plannedStartDateTime: slotStart,
+        plannedEndDateTime: new Date(slotStart.getTime() + SLOT_MS),
+        milesDriven: null,
+        commuteMiles: null,
+        originLabel: null,
+        originLat: null,
+        originLng: null,
+      });
+      continue;
+    }
+
+    const miles = prev ? await computeLegMiles(prev, { lat: v.school.lat, lng: v.school.lng }) : null;
+    updates.push({
+      id: v.id,
+      plannedStartDateTime: slotStart,
+      plannedEndDateTime: new Date(slotStart.getTime() + SLOT_MS),
+      milesDriven: miles,
+      // Only the day's opening leg can be the commute.
+      commuteMiles: isFirstDriven && startIsCommute ? miles : null,
+      originLabel: prev?.label ?? null,
+      originLat: prev?.lat ?? null,
+      originLng: prev?.lng ?? null,
+    });
+
+    prev = { lat: v.school.lat, lng: v.school.lng, label: v.school.name };
+    isFirstDriven = false;
+  }
+
+  await prisma.$transaction(
+    updates.map((u) =>
+      prisma.visit.update({
+        where: { id: u.id },
+        data: {
+          plannedStartDateTime: u.plannedStartDateTime,
+          plannedEndDateTime: u.plannedEndDateTime,
+          milesDriven: u.milesDriven ?? null,
+          commuteMiles: u.commuteMiles ?? null,
+          originLabel: u.originLabel,
+          originLat: u.originLat,
+          originLng: u.originLng,
+        },
+      })
+    )
+  );
+
+  return getDayRoute(dateIso);
 }
 
 export async function deleteVisitLog(id: string) {

@@ -213,6 +213,10 @@ model Visit {
   // chosen origin (home/GPS/custom address) to the school's coordinates.
   milesDriven                   Decimal?            @db.Decimal(6, 2)
   originLabel                   String?
+  /// Coordinates of that origin. Without them a day's mileage can be read but
+  /// never recomputed, so a stop remembered out of order could not be fixed.
+  originLat                     Float?
+  originLng                     Float?
   // Closing leg of the day, back to where the RM started. Held on the
   // day's last visit so a day can only ever carry one return.
   returnMilesDriven             Decimal?            @db.Decimal(6, 2)

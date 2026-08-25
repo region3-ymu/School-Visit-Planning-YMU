@@ -7,8 +7,9 @@ import {
     getMyDayStatus, getOfficeLocations, getPreviousVisitToday,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
-import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronRight } from "lucide-react";
+import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronRight, Route } from "lucide-react";
 import VisitDetails from "./visit/VisitDetails";
+import DayRouteModal from "./visit/DayRouteModal";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
@@ -81,6 +82,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [office, setOffice] = useState<Office | null>(null);
 
     const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [routeDay, setRouteDay] = useState<{ iso: string; label: string } | null>(null);
 
     const [dayStatus, setDayStatus] = useState<Awaited<ReturnType<typeof getMyDayStatus>> | null>(null);
 
@@ -507,6 +509,16 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                                                <button
+                                                    onClick={() => setRouteDay({
+                                                        iso: new Date(log.date).toISOString(),
+                                                        label: format(new Date(log.date), "MMM d, yyyy"),
+                                                    })}
+                                                    className="text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 mr-3"
+                                                    title="Reorder this day's route and reprice it"
+                                                >
+                                                    <Route size={16} />
+                                                </button>
                                                 <button onClick={() => handleOpenEdit(log)} className="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 mr-3">
                                                     <Edit2 size={16} />
                                                 </button>
@@ -529,6 +541,18 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                         </table>
                     </div>
                 </div>
+            )}
+
+            {routeDay && (
+                <DayRouteModal
+                    dateIso={routeDay.iso}
+                    dateLabel={routeDay.label}
+                    onClose={() => setRouteDay(null)}
+                    onSaved={async () => {
+                        setDayStatus(await getMyDayStatus(new Date().toISOString()));
+                        await fetchHistory();
+                    }}
+                />
             )}
 
             {/* Manual Log Modal */}
