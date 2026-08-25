@@ -33,6 +33,23 @@ npx prisma studio
 
 ---
 
+## PWA icons
+
+```bash
+# Regenerate public/icons/ from public/brand/ + the route mark
+npm run icons
+```
+
+Only needed if the branding or the mark changes; the generated PNGs are
+committed. `any` and `maskable` are different artwork on purpose — the reasoning
+is in `scripts/generate-icons.mjs`, read it before editing either.
+
+Note that PWA behaviour differs between dev and production: serwist's runtime
+caching and the `/~offline` fallback are only active in a production build.
+To check them, `npm run build` then use the `svp-prod` preview (port 3100).
+
+---
+
 ## Build & Type Check
 
 ```bash

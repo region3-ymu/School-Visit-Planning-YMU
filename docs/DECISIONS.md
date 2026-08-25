@@ -112,3 +112,23 @@ Key decisions made during Phases 1 and 2. Do not reverse without understanding t
 **Decision:** `merge` callback in `plannerStore` persist config drops `manualOverrides` older than 14 days on hydration.
 
 **Why:** Without this, old pinned overrides persist forever and cause stale scheduling. **Do not remove the merge callback.**
+
+---
+
+## SVP is an installable PWA, but deliberately NOT an offline app
+
+**Decision:** SVP ships a manifest, icons and a service worker (`src/app/manifest.ts`, `src/app/sw.ts`) so it installs to a home screen and opens in its own window. The worker precaches the build's static assets and serves `/~offline` when a page cannot be fetched. It caches **no pages, no RSC navigations and no `/api/` responses** — `sw.ts` registers a `NetworkOnly` rule for all three ahead of serwist's `defaultCache`, whose own catch-alls would otherwise cache them.
+
+**Why:** YMU-A caches pages because a teacher has to clock in from a school with no signal, and it can serve real content offline because its data is mirrored to IndexedDB. SVP has neither: every screen is server-rendered from Neon through server actions, so a cached page offline would render an empty shell — while writing one Regional Manager's schools, visits and mileage to disk, and risking a stale shell that asks for JS chunks a deploy has already removed.
+
+**Do not "fix" the offline screen by caching pages.** If SVP ever needs offline planning, the work is a local data mirror first.
+
+---
+
+## Static assets bypass the auth middleware (`src/proxy.ts`)
+
+**Decision:** The middleware matcher exempts any path whose last segment contains a dot, i.e. every request for a file. Only extension-less public pages (`/login`, `/api/auth`, `/~offline`) are listed in `PUBLIC_PATHS`.
+
+**Why:** The matcher previously exempted `public/`, which matched **nothing** — files in `public/` are served from the root, so every static asset was auth-gated. That silently broke the PWA twice over: `/manifest.webmanifest` is fetched without credentials, so it always redirected and the install option never appeared; and the service worker's precache followed a redirect built from `NEXTAUTH_URL` to an origin that wasn't listening, hung, and never left `installing` — with nothing logged anywhere.
+
+**Do not narrow this back to a path list.** Static files carry nothing worth gating, and the failure mode when one is gated is invisible.
