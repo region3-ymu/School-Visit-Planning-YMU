@@ -30,6 +30,8 @@ export interface VisitInfo {
   classEndTime?: string;
   /** Program/subject name for the class at this time (e.g. "Drumline", "Modern Band") */
   subjectName?: string;
+  teacherId?: string;
+  teacherName?: string;
   isPinned: boolean;
   isCompleted?: boolean;
   isSkipped?: boolean;

@@ -16,6 +16,8 @@ export function proposedVisitToVisitInfo(p: ProposedVisit): VisitInfo {
     classStartTime: p.classStartTime,
     classEndTime: p.classEndTime,
     subjectName: p.subjectName,
+    teacherId: p.teacherId,
+    teacherName: p.teacherName,
     isPinned: false,
     isCompleted: false,
     viableOptionsThisWeek: [],

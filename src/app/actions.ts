@@ -405,6 +405,9 @@ const confirmVisitSchema = z
     mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
     // Van miles are measured but never reimbursed; see the mileage report.
     vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
+    // Who the ratings are about. Taken from the class slot the visit was booked
+    // against, so it needs no asking in the planner's flow.
+    observedTeacherId: z.string().optional(),
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
     principalNotes: z.string().max(2000).optional(),
@@ -665,6 +668,8 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         visitedById: user.id,
         mode: data.mode,
         vehicle: data.vehicle,
+        // Never on a remote visit: there is no class in the room to rate.
+        observedTeacherId: isRemote ? undefined : data.observedTeacherId,
         milesDriven: milesDriven ?? undefined,
         commuteMiles: commuteMiles ?? undefined,
         originLabel: originLabel ?? undefined,
@@ -745,6 +750,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
     include: {
       school: { include: { region: { select: { name: true } } } },
       visitedBy: { select: { name: true, email: true } },
+      observedTeacher: { select: { name: true } },
     },
     orderBy: { plannedStartDateTime: "desc" },
   });
@@ -773,6 +779,8 @@ export async function getVisitHistory(regionFilter?: string | null) {
     obsNotes: v.obsNotes,
     obsSkipReason: v.obsSkipReason,
     obsSkipNotes: v.obsSkipNotes,
+    observedTeacherId: v.observedTeacherId,
+    observedTeacherName: v.observedTeacher?.name ?? null,
     hasInstrumentRequest: v.hasInstrumentRequest,
     instrumentRequestDetails: v.instrumentRequestDetails,
     geofenceOverridden: v.geofenceOverridden,
@@ -799,6 +807,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
 const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
   vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
+  observedTeacherId: z.string().optional(),
   origin: originCoordsSchema.optional(),
   notes: z.string().max(2000).optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
@@ -869,6 +878,7 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       visitedById: user.id,
       mode: data.mode,
       vehicle: data.vehicle,
+      observedTeacherId: isRemote ? undefined : data.observedTeacherId,
       milesDriven: milesDriven ?? undefined,
       commuteMiles: commuteMiles ?? undefined,
       originLabel: originLabel ?? undefined,
@@ -1114,6 +1124,7 @@ export async function deleteVisitLog(id: string) {
 const editVisitSchema = z.object({
   notes: z.string().max(2000).optional(),
   vehicle: z.enum(["PERSONAL", "YMU_VAN"]).optional(),
+  observedTeacherId: z.string().nullable().optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).optional(),
   principalNotes: z.string().max(2000).optional(),
   hasInstrumentRequest: z.boolean().optional(),
@@ -1167,6 +1178,7 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
       ...(plannedEnd ? { plannedEndDateTime: plannedEnd } : {}),
       ...(data.notes !== undefined ? { reason: data.notes || "Manual logging" } : {}),
       ...(data.vehicle !== undefined ? { vehicle: data.vehicle } : {}),
+      ...(data.observedTeacherId !== undefined ? { observedTeacherId: data.observedTeacherId } : {}),
       ...(data.visitedWith !== undefined ? { visitedWith: data.visitedWith } : {}),
       ...(data.principalNotes !== undefined ? { principalNotes: data.principalNotes || null } : {}),
       ...(data.hasInstrumentRequest !== undefined
@@ -1432,16 +1444,22 @@ export async function getTeacherProfile(teacherId: string) {
   );
   const schoolIds = [...new Set(sessions.map((s) => s.school.id))];
 
-  // An observation belongs to this teacher when the visit ticked "YMU teacher"
-  // at a school they teach at. Visit has no teacher column of its own, so this
-  // is as precise as the recorded data allows; where one school has two
-  // teachers, both will see it, which is stated on screen rather than hidden.
+  // A visit now names the teacher it observed, so that is used where it exists.
+  // Older visits recorded only the school; those are still shown, marked as
+  // unattributed, because dropping them would lose the history they hold — but
+  // they are the reason a school with two teachers shows the same visit twice.
   const visits = schoolIds.length
     ? await prisma.visit.findMany({
         where: {
           status: "DONE",
-          schoolId: { in: schoolIds },
-          visitedWith: { has: "YMU_TEACHER" },
+          OR: [
+            { observedTeacherId: teacherId },
+            {
+              observedTeacherId: null,
+              schoolId: { in: schoolIds },
+              visitedWith: { has: "YMU_TEACHER" },
+            },
+          ],
         },
         include: {
           school: { select: { id: true, name: true } },
@@ -1459,6 +1477,8 @@ export async function getTeacherProfile(teacherId: string) {
     visitedByName: v.visitedBy?.name ?? v.visitedBy?.email ?? null,
     isMine: v.visitedById === user.id,
     mode: v.mode,
+    // False for older visits that recorded only the school.
+    attributed: v.observedTeacherId === teacherId,
     ratings: {
       obsPlanningPrep: v.obsPlanningPrep,
       obsCultureManagement: v.obsCultureManagement,

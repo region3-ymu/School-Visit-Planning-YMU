@@ -58,7 +58,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
 
 
-    type ConfirmModalData = { schoolId: string, schoolName: string, visitDate: Date, lat?: number, lng?: number, subjectName?: string };
+    type ConfirmModalData = { schoolId: string, schoolName: string, visitDate: Date, lat?: number, lng?: number, subjectName?: string, teacherId?: string, teacherName?: string };
 
     const [confirmModalData, setConfirmModalData] = useState<ConfirmModalData | null>(null);
 
@@ -677,6 +677,8 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
                                                                     lat: visit.lat,
                                                                     lng: visit.lng,
                                                                     subjectName: visit.subjectName,
+                                                                    teacherId: visit.teacherId,
+                                                                    teacherName: visit.teacherName,
                                                                 })}
 
                                                                 disabled={loading}
@@ -760,6 +762,8 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
                     schoolLat={confirmModalData.lat}
                     schoolLng={confirmModalData.lng}
                     subjectName={confirmModalData.subjectName}
+                    teacherId={confirmModalData.teacherId}
+                    teacherName={confirmModalData.teacherName}
                     onClose={() => setConfirmModalData(null)}
                     onConfirmed={() => handleVisitConfirmed(confirmModalData.schoolId, confirmModalData.visitDate)}
                 />

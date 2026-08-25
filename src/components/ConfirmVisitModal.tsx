@@ -40,6 +40,8 @@ export default function ConfirmVisitModal({
   schoolLat,
   schoolLng,
   subjectName,
+  teacherId,
+  teacherName,
   onClose,
   onConfirmed,
 }: {
@@ -49,6 +51,9 @@ export default function ConfirmVisitModal({
   schoolLat?: number;
   schoolLng?: number;
   subjectName?: string;
+  /** The teacher whose class this slot is — the ratings below are about them. */
+  teacherId?: string;
+  teacherName?: string;
   onClose: () => void;
   onConfirmed: () => void;
 }) {
@@ -219,6 +224,8 @@ export default function ConfirmVisitModal({
       await confirmVisit(schoolId, visitDate.toISOString(), {
         mode,
         vehicle,
+        // Only meaningful alongside a rubric; a phone call observes nobody.
+        observedTeacherId: showTeacherObservation ? teacherId : undefined,
         origin,
         visitedWith,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
@@ -424,6 +431,12 @@ export default function ConfirmVisitModal({
           )}
 
           {/* Teacher observation — YMU teacher */}
+          {showTeacherObservation && teacherName && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 -mb-2">
+              Ratings below are recorded for <span className="font-medium">{teacherName}</span>
+              {subjectName ? ` (${subjectName})` : ""}.
+            </p>
+          )}
           {showTeacherObservation && (
             <TeacherObservationFields
               observations={observations}

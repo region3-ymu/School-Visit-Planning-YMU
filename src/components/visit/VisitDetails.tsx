@@ -63,6 +63,7 @@ export type VisitDetailsData = {
   instrumentRequestDetails: string | null;
   geofenceOverridden: boolean;
   visitedByName: string | null;
+  observedTeacherName?: string | null;
 };
 
 /**
@@ -148,7 +149,7 @@ export default function VisitDetails({ visit }: { visit: VisitDetailsData }) {
 
       {(rated.length > 0 || visit.obsSkipReason) && (
         <div className="md:col-span-2">
-          <Section title="Teacher observation">
+          <Section title={visit.observedTeacherName ? `Teacher observation — ${visit.observedTeacherName}` : "Teacher observation"}>
             {visit.obsSkipReason ? (
               <p className="text-sm text-amber-700 dark:text-amber-400">
                 Not evaluated — {skipLabel(visit.obsSkipReason).toLowerCase()}

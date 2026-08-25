@@ -167,7 +167,9 @@ export async function proposeVisitsForWeek(
         endDateTime: { lt: weekEnd },
         school: schoolWhere,
       },
-      include: { subject: true },
+      // The teacher comes along so the visit can record who was actually
+      // observed, rather than leaving it to "whoever teaches here".
+      include: { subject: true, teacher: true },
     }),
   ]);
 
@@ -219,6 +221,8 @@ export async function proposeVisitsForWeek(
     score: number;
     reason: string;
     subjectName?: string;
+    teacherId?: string;
+    teacherName?: string;
     noClassWarning: boolean;
     visitRuleFrequency: string;
     visitRuleNote?: string;
@@ -233,6 +237,8 @@ export async function proposeVisitsForWeek(
       classStart: Date;
       classEnd: Date;
       subjectName?: string;
+      teacherId?: string;
+      teacherName?: string;
     }[];
   };
 
@@ -311,6 +317,8 @@ export async function proposeVisitsForWeek(
         score,
         reason: reasonText,
         subjectName: bestSession?.subject?.name,
+        teacherId: bestSession?.teacher?.externalId ? bestSession.teacher.id : undefined,
+        teacherName: bestSession?.teacher?.externalId ? bestSession.teacher.name : undefined,
         noClassWarning: !hasClass,
         visitRuleFrequency,
         visitRuleNote,
@@ -322,6 +330,10 @@ export async function proposeVisitsForWeek(
               classStart: s.startDateTime,
               classEnd: s.endDateTime,
               subjectName: s.subject?.name,
+              // Only a teacher imported from YMU-A; a leftover calendar row is a
+              // school name, not a person to attribute a rating to.
+              teacherId: s.teacher?.externalId ? s.teacher.id : undefined,
+              teacherName: s.teacher?.externalId ? s.teacher.name : undefined,
             }))
           )
           .sort((a, b) => a.start.getTime() - b.start.getTime()),
@@ -369,6 +381,8 @@ export async function proposeVisitsForWeek(
     classStart: Date;
     classEnd: Date;
     subjectName?: string;
+    teacherId?: string;
+    teacherName?: string;
   };
   type Stop = { candidate: Candidate; slot: Slot };
 
@@ -485,6 +499,8 @@ export async function proposeVisitsForWeek(
         classStartTime: formatTimeInAppZone(slot.classStart),
         classEndTime: formatTimeInAppZone(slot.classEnd),
         subjectName: slot.subjectName,
+        teacherId: slot.teacherId,
+        teacherName: slot.teacherName,
       }))
     );
   }
@@ -535,6 +551,8 @@ export async function proposeVisitsForWeek(
         score: c.score,
         reason: c.reason,
         subjectName: c.subjectName,
+        teacherId: c.teacherId,
+        teacherName: c.teacherName,
         noClassWarning: c.noClassWarning,
         visitRuleFrequency: c.visitRuleFrequency,
         visitRuleNote: c.visitRuleNote,

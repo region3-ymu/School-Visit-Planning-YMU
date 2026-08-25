@@ -109,7 +109,7 @@ model School {
   active               Boolean   @default(true)
   /// True for the YMU office. Kept out of school lists, counts, the planner
   /// and the roster importers, but reachable for mileage like any other stop.
-  isOffice             Boolean             @default(false)
+  isOffice             Boolean   @default(false)
   regionId             String?
   // Unique: two schools pinned to the same calendar would duplicate every
   // ClassSession that calendar produces.
@@ -132,18 +132,19 @@ model School {
 }
 
 model Teacher {
-  id            String         @id @default(cuid())
+  id             String         @id @default(cuid())
   /// The teacher's YMU-A profile id. Present for anyone imported from there,
   /// null for rows the calendar sync invented.
-  externalId    String?        @unique
-  name          String
-  subjects      String?
-  email         String?
-  schoolId      String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  classSessions ClassSession[]
-  school        School?        @relation(fields: [schoolId], references: [id])
+  externalId     String?        @unique
+  name           String
+  subjects       String?
+  email          String?
+  schoolId       String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  classSessions  ClassSession[]
+  observedVisits Visit[]
+  school         School?        @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])
 }
@@ -233,6 +234,10 @@ model Visit {
   returnCommuteMiles            Decimal?            @db.Decimal(6, 2)
   outcome                       VisitOutcome?
   outcomeNotes                  String?
+  /// The teacher the ratings below are about. Known from the class slot the
+  /// visit was booked against; null for anything logged before it was captured.
+  observedTeacherId             String?
+  observedTeacher               Teacher?            @relation(fields: [observedTeacherId], references: [id], onDelete: SetNull)
   visitedWith                   VisitedWithOption[]
   principalNotes                String?
   hasInstrumentRequest          Boolean             @default(false)
@@ -247,22 +252,23 @@ model Visit {
 
   // ─── Teacher observation (shown when visitedWith includes YMU_TEACHER) ──────
   // Each domain is independently skippable ("didn't see it this visit").
-  obsPlanningPrep               ObservationRating?
-  obsCultureManagement          ObservationRating?
-  obsInstructionMusicianship    ObservationRating?
-  obsEngagementEvidence         ObservationRating?
-  obsProfessionalismGrowth      ObservationRating?
+  obsPlanningPrep            ObservationRating?
+  obsCultureManagement       ObservationRating?
+  obsInstructionMusicianship ObservationRating?
+  obsEngagementEvidence      ObservationRating?
+  obsProfessionalismGrowth   ObservationRating?
   // Single shared notes field covering all 5 domains, not one per domain.
-  obsNotes                      String?
+  obsNotes                   String?
   // Why the rubric above is blank. Without this, an unrated visit is
   // indistinguishable from an RM who simply skipped the paperwork.
-  obsSkipReason                 ObservationSkipReason?
-  obsSkipNotes                  String?
+  obsSkipReason              ObservationSkipReason?
+  obsSkipNotes               String?
 
   @@index([schoolId])
   @@index([status])
   @@index([visitedById])
   @@index([vehicle])
+  @@index([observedTeacherId])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────

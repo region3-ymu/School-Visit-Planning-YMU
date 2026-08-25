@@ -105,13 +105,13 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
 
       <Card>
         <h2 className="font-semibold mb-1">Observations</h2>
-        {/* Said plainly rather than quietly presented as this teacher's own: a
-            visit records the school it was to, not which teacher was watched. */}
+        {/* Two kinds of row, and the difference is stated rather than smoothed
+            over: what the visit actually recorded is not the same thing for both. */}
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 flex items-start gap-1.5">
           <Info size={12} className="shrink-0 mt-0.5" />
-          Visits where a YMU teacher was seen at a school this teacher works. Where a school has
-          more than one teacher, a visit appears on both — the visit records the school, not which
-          teacher was watched.
+          A visit now names the teacher whose class was observed. Older ones recorded only the
+          school, and are marked <span className="font-medium">unattributed</span> — those still
+          show on every teacher at that school, because nothing captured which one it was.
         </p>
 
         {observations.length === 0 ? (
@@ -137,7 +137,17 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
                         <span className="text-gray-400"> (no longer teaches here)</span>
                       )}
                     </span>
-                    <span className="text-xs text-gray-500 dark:text-gray-400">{o.visitedByName}</span>
+                    <span className="text-xs text-gray-500 dark:text-gray-400 inline-flex items-center gap-2">
+                      {!o.attributed && (
+                        <span
+                          className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-gray-400 font-medium"
+                          title="Logged before a visit recorded which teacher was observed"
+                        >
+                          unattributed
+                        </span>
+                      )}
+                      {o.visitedByName}
+                    </span>
                   </div>
 
                   {o.obsSkipReason ? (

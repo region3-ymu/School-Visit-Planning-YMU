@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    getMyDayStatus, getOfficeLocations, getPreviousVisitToday,
+    getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getSchoolTeachers,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronRight, Route } from "lucide-react";
@@ -62,6 +62,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [gpsError, setGpsError] = useState<string | null>(null);
     const [gpsLoading, setGpsLoading] = useState(false);
     const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
+    // Who was observed. A manual entry has no class slot to read it from, so it
+    // is asked — but only from the teachers who actually work that school.
+    type SchoolTeacher = Awaited<ReturnType<typeof getSchoolTeachers>>[number];
+    const [schoolTeachers, setSchoolTeachers] = useState<SchoolTeacher[]>([]);
+    const [observedTeacherId, setObservedTeacherId] = useState("");
     // What the server will actually chain from for the date being logged. The
     // origin picker only matters when this comes back empty — asking anyway made
     // it look as though an earlier stop that day had been forgotten.
@@ -148,6 +153,19 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         return () => { cancelled = true; };
     }, [showModal, editingId, visitIso]);
 
+    // Reloaded whenever the school changes; picking a different school must not
+    // leave the previous school's teacher selected.
+    useEffect(() => {
+        if (!selectedSchool) { setSchoolTeachers([]); setObservedTeacherId(""); return; }
+        let cancelled = false;
+        getSchoolTeachers(selectedSchool).then((list) => {
+            if (cancelled) return;
+            setSchoolTeachers(list);
+            setObservedTeacherId((prev) => (list.some((t) => t.id === prev) ? prev : list.length === 1 ? list[0].id : ""));
+        });
+        return () => { cancelled = true; };
+    }, [selectedSchool]);
+
     const toggleVisitedWith = (value: string) =>
         setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
 
@@ -173,6 +191,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setMode("IN_PERSON");
         setOriginMode("home");
         setVehicle("PERSONAL");
+        setObservedTeacherId("");
         setCustomAddress("");
         setVisitedWith([]);
         setPrincipalNotes("");
@@ -243,6 +262,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setObsNotes(log.obsNotes ?? "");
         setObsSkipReason((log.obsSkipReason as ObservationSkipReason | null) ?? null);
         setObsSkipNotes(log.obsSkipNotes ?? "");
+        setObservedTeacherId(log.observedTeacherId ?? "");
         setShowModal(true);
     };
 
@@ -282,6 +302,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() : "",
                     obsSkipReason: showTeacherObservation ? obsSkipReason : null,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() : "",
+                    observedTeacherId: showTeacherObservation ? observedTeacherId || null : null,
                 });
             } else {
                 // Only the first in-person visit of the day needs an origin; the server
@@ -334,6 +355,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() || undefined : undefined,
                     obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
+                    observedTeacherId: showTeacherObservation ? observedTeacherId || undefined : undefined,
                 });
             }
         } catch (err) {
@@ -761,6 +783,27 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 rows={2}
                                                 className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
                                             />
+                                        </div>
+                                    )}
+
+                                    {showTeacherObservation && schoolTeachers.length > 0 && (
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                                Which teacher?
+                                            </label>
+                                            <select
+                                                value={observedTeacherId}
+                                                onChange={(e) => setObservedTeacherId(e.target.value)}
+                                                className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm text-gray-900 dark:text-gray-100"
+                                            >
+                                                <option value="">Not recorded</option>
+                                                {schoolTeachers.map((t) => (
+                                                    <option key={t.id} value={t.id}>
+                                                        {t.name}
+                                                        {t.subjectsHere.length > 0 ? ` — ${t.subjectsHere.join(", ")}` : ""}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </div>
                                     )}
 

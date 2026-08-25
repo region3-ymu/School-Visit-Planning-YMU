@@ -21,6 +21,8 @@ export interface ProposedVisit {
   score: number;
   reason: string;
   subjectName?: string;
+  teacherId?: string;
+  teacherName?: string;
   /** True when no ClassSession exists for this school on this day */
   noClassWarning?: boolean;
   /** The school's active VisitRule frequency, or "DEFAULT" if using the default BIWEEKLY */
