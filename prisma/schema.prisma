@@ -121,9 +121,10 @@ model School {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
-  region        Region?        @relation(fields: [regionId], references: [id])
+  region        Region?               @relation(fields: [regionId], references: [id])
   classSessions ClassSession[]
   teachers      Teacher[]
+  scheduleNotes ProgramScheduleNote[]
   visits        Visit[]
   visitRules    VisitRule[]
 
@@ -395,4 +396,25 @@ model Quarter {
   endDate    DateTime
 
   @@unique([schoolYear, label])
+}
+
+/// A line from the master programmes spreadsheet, shown as reference beside a
+/// school's timetable. Read-only: nothing plans, prices or schedules from it.
+model ProgramScheduleNote {
+  id             String   @id @default(cuid())
+  schoolId       String
+  /// Matched to a Subject by name — the sheet is hand-written and its wording
+  /// drifts from the calendar's.
+  subjectName    String
+  /// "A days", "B days", "Odd dates of the month" — as the sheet words it.
+  dayPattern     String?
+  period         String?
+  timesText      String?
+  teacherName    String?
+  scheduleStatus String?
+  sourceRow      Int?
+  importedAt     DateTime @default(now())
+  school         School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  @@index([schoolId])
 }

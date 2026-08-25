@@ -78,12 +78,16 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
                         : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
                     }`}
                     title={
-                      prog.cadence === "alternating"
-                        ? "Runs every other week — what the master schedule calls A/B days"
-                        : "Runs every week"
+                      prog.sheetDayPatterns.length > 0
+                        ? "From the master programmes schedule"
+                        : "Counted from the calendar dates"
                     }
                   >
-                    {prog.cadence === "alternating" ? "alternating weeks" : "every week"}
+                    {prog.sheetDayPatterns.length > 0
+                      ? prog.sheetDayPatterns.join(" / ")
+                      : prog.cadence === "alternating"
+                        ? "alternating weeks"
+                        : "every week"}
                   </span>
                 </div>
                 {prog.teacherName && (
@@ -93,6 +97,9 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
                   >
                     {prog.teacherName}
                   </Link>
+                )}
+                {prog.sheetPeriods.length > 0 && (
+                  <span className="block text-xs text-gray-400">{prog.sheetPeriods.join(" · ")}</span>
                 )}
                 {/* Separate lines because most schools shift on Wednesdays. */}
                 <div className="mt-1.5 space-y-0.5">

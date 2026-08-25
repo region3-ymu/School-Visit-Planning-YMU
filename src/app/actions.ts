@@ -1253,6 +1253,20 @@ export async function getSchoolWeeklySchedules(schoolIds: string[]) {
 
   const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
 
+  // The master spreadsheet's own words, shown alongside. Reference only — it is
+  // matched to a programme by name and never relied on for anything.
+  const noteRows = await prisma.programScheduleNote.findMany({
+    where: { schoolId: { in: schoolIds } },
+    orderBy: { sourceRow: "asc" },
+  });
+  const noteKey = (schoolId: string, subject: string) =>
+    `${schoolId}|${subject.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+  const notesByProgramme = new Map<string, typeof noteRows>();
+  for (const n of noteRows) {
+    const k = noteKey(n.schoolId, n.subjectName);
+    notesByProgramme.set(k, [...(notesByProgramme.get(k) ?? []), n]);
+  }
+
   const sessions = await prisma.classSession.findMany({
     where: {
       schoolId: { in: schoolIds },
@@ -1287,6 +1301,13 @@ export async function getSchoolWeeklySchedules(schoolIds: string[]) {
      * on, and a guessed label reads as fact.
      */
     cadence: "weekly" | "alternating";
+    /**
+     * How the master spreadsheet words it — "A days", "B days", "Odd dates of
+     * the month". Display text only; the calendar remains the source of truth
+     * for when a class actually is.
+     */
+    sheetDayPatterns: string[];
+    sheetPeriods: string[];
     dates: Set<string>;
   };
 
@@ -1314,6 +1335,8 @@ export async function getSchoolWeeklySchedules(schoolIds: string[]) {
         occurrences: 0,
         days: [] as string[],
         cadence: "weekly" as const,
+        sheetDayPatterns: [] as string[],
+        sheetPeriods: [] as string[],
         dates: new Set<string>(),
       };
     programme.occurrences += 1;
@@ -1351,6 +1374,14 @@ export async function getSchoolWeeklySchedules(schoolIds: string[]) {
     const ratios = [...perWeekday.values()].map((n) => n / Math.max(1, weeksInTerm));
     const typical = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1;
     programme.cadence = typical < 0.75 ? "alternating" : "weekly";
+
+    const matched = notesByProgramme.get(noteKey(schoolId, programme.subject)) ?? [];
+    programme.sheetDayPatterns = [
+      ...new Set(matched.map((m) => m.dayPattern).filter((d): d is string => !!d)),
+    ];
+    programme.sheetPeriods = [
+      ...new Set(matched.map((m) => m.period).filter((p): p is string => !!p)),
+    ];
     const sortDays = (d: string[]) => d.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
     programme.days = sortDays(programme.days);
     // The dominant slot first; a Wednesday variant reads as the exception it is.

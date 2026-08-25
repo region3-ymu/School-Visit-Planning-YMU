@@ -70,12 +70,22 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
                                                 <span className="font-semibold text-gray-700 dark:text-gray-300 truncate" title={prog.subject}>
                                                     {prog.subject}
                                                 </span>
+                                                {/* The sheet's own wording where there is one; otherwise
+                                                    what the calendar dates show. */}
                                                 <span className={`px-1.5 py-0.5 rounded font-bold shrink-0 ${
                                                     prog.cadence === "alternating"
                                                         ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400"
                                                         : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400"
-                                                }`} title={prog.cadence === "alternating" ? "Runs every other week — the master schedule's A/B days" : "Runs every week"}>
-                                                    {prog.cadence === "alternating" ? "alt weeks" : "weekly"}
+                                                }`} title={
+                                                    prog.sheetDayPatterns.length > 0
+                                                        ? "From the master programmes schedule"
+                                                        : prog.cadence === "alternating"
+                                                            ? "Runs every other week, counted from the calendar"
+                                                            : "Runs every week, counted from the calendar"
+                                                }>
+                                                    {prog.sheetDayPatterns.length > 0
+                                                        ? prog.sheetDayPatterns.join(" / ")
+                                                        : prog.cadence === "alternating" ? "alt weeks" : "weekly"}
                                                 </span>
                                             </div>
                                             {prog.teacherName && (
