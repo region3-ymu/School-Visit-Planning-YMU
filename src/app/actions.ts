@@ -18,6 +18,7 @@ import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { haversineMeters } from "@/lib/geo";
 import {
+  APP_TIME_ZONE,
   dayKeyInAppZone,
   formatTimeInAppZone,
   addDaysToDayKey,
@@ -1218,6 +1219,277 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
  * by hand carry no classes yet and would vanish from their own school's list, so
  * they are unioned in.
  */
+/**
+ * The recurring weekly timetable a school actually runs, derived from its class
+ * sessions.
+ *
+ * The cards used to read School.availability, a hand-maintained JSON blob that
+ * mostly said "No specific windows set" or named a legacy A/B day. The calendar
+ * already knows the real thing — subject, teacher, day and time — so this reads
+ * that instead. One row per distinct weekday+time+subject, however many weeks it
+ * repeats for.
+ */
+export async function getSchoolWeeklySchedules(schoolIds: string[]) {
+  const session = await auth();
+  requireUser(session);
+  if (schoolIds.length === 0) return {};
+
+  const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+
+  const sessions = await prisma.classSession.findMany({
+    where: {
+      schoolId: { in: schoolIds },
+      ...(firstQuarter ? { startDateTime: { gte: firstQuarter.startDate } } : {}),
+    },
+    select: {
+      schoolId: true,
+      startDateTime: true,
+      endDateTime: true,
+      subject: { select: { name: true } },
+      teacher: { select: { id: true, name: true, externalId: true } },
+    },
+    orderBy: { startDateTime: "asc" },
+  });
+
+  type Slot = {
+    weekday: number;
+    weekdayLabel: string;
+    start: string;
+    end: string;
+    subject: string;
+    teacherName: string | null;
+    teacherId: string | null;
+    occurrences: number;
+  };
+  const out: Record<string, Slot[]> = {};
+  const seen = new Map<string, Slot>();
+
+  for (const s of sessions) {
+    // Weekday and time in Miami, not the host's zone — the same instant is a
+    // different day either side of midnight.
+    const weekdayLabel = new Intl.DateTimeFormat("en-US", {
+      timeZone: APP_TIME_ZONE,
+      weekday: "short",
+    }).format(s.startDateTime);
+    const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekdayLabel);
+    const start = formatTimeInAppZone(s.startDateTime);
+    const end = formatTimeInAppZone(s.endDateTime);
+    // A real teacher only — a leftover calendar row is worse than no name.
+    const teacher = s.teacher?.externalId ? s.teacher : null;
+    const key = `${s.schoolId}|${weekday}|${start}|${s.subject.name}|${teacher?.id ?? ""}`;
+
+    const existing = seen.get(key);
+    if (existing) {
+      existing.occurrences += 1;
+      continue;
+    }
+    const slot: Slot = {
+      weekday,
+      weekdayLabel,
+      start,
+      end,
+      subject: s.subject.name,
+      teacherName: teacher?.name ?? null,
+      teacherId: teacher?.id ?? null,
+      occurrences: 1,
+    };
+    seen.set(key, slot);
+    (out[s.schoolId] ||= []).push(slot);
+  }
+
+  for (const list of Object.values(out)) {
+    list.sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start));
+  }
+  return out;
+}
+
+/**
+ * A school's own page: its timetable, who teaches it, and what past visits
+ * found there.
+ *
+ * The visit form's answers — the conversation with a principal, a teacher's
+ * ratings, an instrument request — were only ever reachable from the flat Visit
+ * History list, mixed in with every other school. Reading them before walking
+ * into a school is the point of having recorded them.
+ */
+export async function getSchoolProfile(schoolId: string) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    include: { region: { select: { name: true } } },
+  });
+  if (!school) return null;
+
+  const [schedules, teachers, visits] = await Promise.all([
+    getSchoolWeeklySchedules([schoolId]),
+    getSchoolTeachers(schoolId),
+    prisma.visit.findMany({
+      where: { schoolId, status: "DONE" },
+      include: { visitedBy: { select: { name: true, email: true } } },
+      orderBy: { plannedStartDateTime: "desc" },
+      take: 25,
+    }),
+  ]);
+
+  return {
+    school: {
+      id: school.id,
+      name: school.name,
+      address: school.address,
+      zipCode: school.zipCode,
+      regionName: school.region?.name ?? null,
+      lat: school.lat,
+      lng: school.lng,
+      isOffice: school.isOffice,
+    },
+    schedule: schedules[schoolId] ?? [],
+    teachers,
+    // Only this user's own visits carry their notes; an RM seeing another
+    // region's school still sees that it was visited, by whom, and when.
+    visits: visits.map((v) => ({
+      id: v.id,
+      date: v.plannedStartDateTime,
+      mode: v.mode,
+      vehicle: v.vehicle,
+      notes: v.reason,
+      visitedByName: v.visitedBy?.name ?? v.visitedBy?.email ?? null,
+      isMine: v.visitedById === user.id,
+      milesDriven: decimalToNumber(v.milesDriven),
+      returnMilesDriven: decimalToNumber(v.returnMilesDriven),
+      commuteMiles: decimalToNumber(v.commuteMiles),
+      returnCommuteMiles: decimalToNumber(v.returnCommuteMiles),
+      originLabel: v.originLabel,
+      visitedWith: v.visitedWith,
+      principalNotes: v.principalNotes,
+      observations: {
+        obsPlanningPrep: v.obsPlanningPrep,
+        obsCultureManagement: v.obsCultureManagement,
+        obsInstructionMusicianship: v.obsInstructionMusicianship,
+        obsEngagementEvidence: v.obsEngagementEvidence,
+        obsProfessionalismGrowth: v.obsProfessionalismGrowth,
+      },
+      obsNotes: v.obsNotes,
+      obsSkipReason: v.obsSkipReason,
+      obsSkipNotes: v.obsSkipNotes,
+      hasInstrumentRequest: v.hasInstrumentRequest,
+      instrumentRequestDetails: v.instrumentRequestDetails,
+      geofenceOverridden: v.geofenceOverridden,
+    })),
+  };
+}
+
+/**
+ * One teacher: where they work, what they teach, and every observation recorded
+ * of them.
+ *
+ * Ratings were filed against a visit, which is a visit to a *school*. Nothing
+ * gathered them per teacher, so there was no way to see whether someone had
+ * improved — the question the rubric exists to answer.
+ */
+export async function getTeacherProfile(teacherId: string) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const teacher = await prisma.teacher.findUnique({
+    where: { id: teacherId },
+    include: { school: { select: { id: true, name: true } } },
+  });
+  if (!teacher) return null;
+
+  const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+
+  const sessions = await prisma.classSession.findMany({
+    where: {
+      teacherId,
+      ...(firstQuarter ? { startDateTime: { gte: firstQuarter.startDate } } : {}),
+    },
+    select: {
+      startDateTime: true,
+      endDateTime: true,
+      school: { select: { id: true, name: true } },
+      subject: { select: { name: true } },
+    },
+    orderBy: { startDateTime: "asc" },
+  });
+
+  // Where they teach and what, one row per school+subject rather than per week.
+  const byKey = new Map<string, { schoolId: string; schoolName: string; subject: string; count: number }>();
+  for (const s of sessions) {
+    const key = `${s.school.id}|${s.subject.name}`;
+    const row = byKey.get(key) ?? {
+      schoolId: s.school.id,
+      schoolName: s.school.name,
+      subject: s.subject.name,
+      count: 0,
+    };
+    row.count += 1;
+    byKey.set(key, row);
+  }
+  const assignments = [...byKey.values()].sort(
+    (a, b) => a.schoolName.localeCompare(b.schoolName) || a.subject.localeCompare(b.subject)
+  );
+  const schoolIds = [...new Set(sessions.map((s) => s.school.id))];
+
+  // An observation belongs to this teacher when the visit ticked "YMU teacher"
+  // at a school they teach at. Visit has no teacher column of its own, so this
+  // is as precise as the recorded data allows; where one school has two
+  // teachers, both will see it, which is stated on screen rather than hidden.
+  const visits = schoolIds.length
+    ? await prisma.visit.findMany({
+        where: {
+          status: "DONE",
+          schoolId: { in: schoolIds },
+          visitedWith: { has: "YMU_TEACHER" },
+        },
+        include: {
+          school: { select: { id: true, name: true } },
+          visitedBy: { select: { name: true, email: true } },
+        },
+        orderBy: { plannedStartDateTime: "desc" },
+      })
+    : [];
+
+  const observations = visits.map((v) => ({
+    id: v.id,
+    date: v.plannedStartDateTime,
+    schoolId: v.school.id,
+    schoolName: v.school.name,
+    visitedByName: v.visitedBy?.name ?? v.visitedBy?.email ?? null,
+    isMine: v.visitedById === user.id,
+    mode: v.mode,
+    ratings: {
+      obsPlanningPrep: v.obsPlanningPrep,
+      obsCultureManagement: v.obsCultureManagement,
+      obsInstructionMusicianship: v.obsInstructionMusicianship,
+      obsEngagementEvidence: v.obsEngagementEvidence,
+      obsProfessionalismGrowth: v.obsProfessionalismGrowth,
+    },
+    obsNotes: v.obsNotes,
+    obsSkipReason: v.obsSkipReason,
+    obsSkipNotes: v.obsSkipNotes,
+    principalNotes: v.principalNotes,
+  }));
+
+  return {
+    teacher: {
+      id: teacher.id,
+      name: teacher.name,
+      email: teacher.email,
+      subjects: teacher.subjects,
+      fromYmuA: teacher.externalId != null,
+      primarySchool: teacher.school,
+    },
+    assignments,
+    classCount: sessions.length,
+    schoolCount: schoolIds.length,
+    // True when a school this teacher works has another too, which is what makes
+    // an observation there ambiguous.
+    observations,
+  };
+}
+
 export async function getSchoolTeachers(schoolId: string) {
   // Last year's classes are still in the database. Counting them here would
   // credit a teacher with a school they no longer serve, and inflate the class

@@ -1,17 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSchools } from "@/app/actions";
+import { getSchools, getSchoolWeeklySchedules } from "@/app/actions";
 import { MapPin, Search, Clock } from "lucide-react";
 import Link from "next/link";
 
 export default function SchoolProfiles({ regionFilter }: { regionFilter?: string | null }) {
-    const [schools, setSchools] = useState<any[]>([]);
+    type School = Awaited<ReturnType<typeof getSchools>>[number];
+    type Schedules = Awaited<ReturnType<typeof getSchoolWeeklySchedules>>;
+    const [schools, setSchools] = useState<School[]>([]);
+    const [schedules, setSchedules] = useState<Schedules>({});
     const [search, setSearch] = useState("");
 
     useEffect(() => {
-        getSchools(regionFilter).then(setSchools);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        getSchools(regionFilter).then(async (list) => {
+            setSchools(list);
+            // The real timetable, from the calendar. School.availability was a
+            // hand-kept blob that mostly said "no windows set" or named an A/B day
+            // nobody uses any more.
+            setSchedules(await getSchoolWeeklySchedules(list.map((s) => s.id)));
+        });
     }, [regionFilter]);
 
     const filteredSchools = schools.filter(s =>
@@ -46,36 +54,34 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
                         <div className="mt-2 mb-4">
                             <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center">
                                 <Clock size={12} className="mr-1" />
-                                Schedule Windows
+                                Weekly Classes
                             </h4>
-                            {(() => {
-                                try {
-                                    const rules = JSON.parse(school.availability);
-                                    if (!Array.isArray(rules) || rules.length === 0)
-                                        return <span className="text-xs text-gray-500">No specific windows set.</span>;
-                                    return (
-                                        <div className="space-y-2">
-                                            {rules.map((rule: any, idx: number) => (
-                                                <div key={idx} className="flex items-center justify-between text-xs bg-gray-50 dark:bg-zinc-950 p-2 rounded-md border border-gray-100 dark:border-zinc-800">
-                                                    <div className="flex items-center space-x-2">
-                                                        <span className={`px-1.5 py-0.5 rounded font-bold ${rule.weekday ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400' : 'bg-gray-100 text-gray-500 dark:bg-zinc-800 dark:text-gray-400'}`}>
-                                                            {rule.weekday ? rule.weekday.substr(0, 3) : (rule.dayType ? `Day ${rule.dayType} (legacy)` : '?')}
-                                                        </span>
-                                                        <span className="font-semibold text-gray-700 dark:text-gray-300 truncate max-w-[120px]" title={rule.class}>
-                                                            {rule.class || 'Visit'}
-                                                        </span>
-                                                    </div>
-                                                    <span className="text-gray-500 font-mono text-[10px]">
-                                                        {rule.start}-{rule.end}
+                            {(schedules[school.id] ?? []).length === 0 ? (
+                                <span className="text-xs text-gray-500">No classes on the calendar.</span>
+                            ) : (
+                                <div className="space-y-1.5">
+                                    {(schedules[school.id] ?? []).map((slot, idx) => (
+                                        <div key={idx} className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-zinc-950 p-2 rounded-md border border-gray-100 dark:border-zinc-800">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                                <span className="px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 shrink-0">
+                                                    {slot.weekdayLabel}
+                                                </span>
+                                                <span className="min-w-0">
+                                                    <span className="block font-semibold text-gray-700 dark:text-gray-300 truncate" title={slot.subject}>
+                                                        {slot.subject}
                                                     </span>
-                                                </div>
-                                            ))}
+                                                    {slot.teacherName && (
+                                                        <span className="block text-[10px] text-gray-500 truncate">{slot.teacherName}</span>
+                                                    )}
+                                                </span>
+                                            </div>
+                                            <span className="text-gray-500 font-mono text-[10px] shrink-0">
+                                                {slot.start}-{slot.end}
+                                            </span>
                                         </div>
-                                    );
-                                } catch {
-                                    return <div className="text-xs text-red-500 font-mono truncate">{school.availability}</div>;
-                                }
-                            })()}
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         <div className="mt-4 pt-4 border-t border-gray-100 dark:border-zinc-800 flex justify-end">
