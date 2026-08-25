@@ -133,6 +133,9 @@ model School {
 
 model Teacher {
   id            String         @id @default(cuid())
+  /// The teacher's YMU-A profile id. Present for anyone imported from there,
+  /// null for rows the calendar sync invented.
+  externalId    String?        @unique
   name          String
   subjects      String?
   email         String?
