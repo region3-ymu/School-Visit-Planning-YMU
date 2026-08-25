@@ -54,9 +54,19 @@ export async function getDashboardStats(regionFilter?: string | null) {
 
   const totalSchools = await prisma.school.count({ where: schoolsOnly });
 
+  // Coverage means "has the region that owns this school been to it". Another
+  // region's RM dropping in is real work, but it doesn't cover the school for
+  // whoever is responsible for it — the same rule the planner's cadence uses,
+  // and without it the two disagree about whether a school has been seen.
   const visitCounts = await prisma.visit.groupBy({
     by: ["schoolId"],
-    where: { status: "DONE", school: schoolsOnly },
+    where: {
+      status: "DONE",
+      school: schoolsOnly,
+      ...(regionWhere.regionId !== undefined
+        ? { OR: [{ visitedBy: { regionId: regionWhere.regionId } }, { visitedById: null }] }
+        : {}),
+    },
     _count: { id: true },
   });
 

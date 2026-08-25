@@ -169,7 +169,18 @@ export async function proposeVisitsForWeek(
       // Mode matters here: a phone call is contact, not a visit. Counting one as
       // the school's last visit reset its cadence and stopped it being proposed,
       // so a school could go a term without anybody walking in.
-      select: { schoolId: true, plannedStartDateTime: true, mode: true },
+      //
+      // Who visited matters too. A school is somebody's responsibility, and
+      // another region's RM dropping in doesn't discharge it: Edison Park is
+      // East's to cover, so Central visiting it must still leave it unvisited on
+      // East's plan.
+      select: {
+        schoolId: true,
+        plannedStartDateTime: true,
+        mode: true,
+        school: { select: { regionId: true } },
+        visitedBy: { select: { regionId: true } },
+      },
     }),
     prisma.classSession.findMany({
       where: {
@@ -191,6 +202,13 @@ export async function proposeVisitsForWeek(
   const lastVisitBySchool = new Map<string, Date>();
   const lastRemoteBySchool = new Map<string, Date>();
   for (const v of doneVisits) {
+    // Counts toward this school's cadence only if the visitor covers it. An
+    // unattributed visit, or one by someone with no region, is counted rather
+    // than discarded — it happened, and there is nothing to say it wasn't theirs.
+    const visitorRegion = v.visitedBy?.regionId ?? null;
+    const coversThisSchool = visitorRegion == null || visitorRegion === v.school.regionId;
+    if (!coversThisSchool) continue;
+
     const target = v.mode === "IN_PERSON" ? lastVisitBySchool : lastRemoteBySchool;
     if (!target.has(v.schoolId)) target.set(v.schoolId, v.plannedStartDateTime);
   }
