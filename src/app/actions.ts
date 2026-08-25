@@ -386,6 +386,7 @@ const originCoordsSchema = z.object({
 const observationRatingSchema = z.enum(["NEEDS_SUPPORT", "DEVELOPING", "MEETS", "EXCEEDS"]);
 
 const observationSkipReasonSchema = z.enum([
+  "DID_NOT_STAY",
   "NO_CLASS_TODAY",
   "CLASS_CANCELLED",
   "TEACHER_ABSENT",
@@ -1100,18 +1101,106 @@ export async function deleteVisitLog(id: string) {
   return serializeVisit(visit);
 }
 
-export async function editVisitLog(id: string, newDateIso: string, newNotes: string) {
-  const date = new Date(newDateIso);
-  const plannedStart = new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
+/**
+ * What can be corrected on a visit already logged.
+ *
+ * Deliberately not the mileage inputs — mode and origin decide how the day's
+ * legs are priced, and changing one here would leave the rest of the day
+ * measured against something that no longer holds. Route order and repricing
+ * belong to reorderDayVisits. Vehicle is safe: it reclassifies miles already
+ * measured rather than changing the distance.
+ */
+const editVisitSchema = z.object({
+  notes: z.string().max(2000).optional(),
+  vehicle: z.enum(["PERSONAL", "YMU_VAN"]).optional(),
+  visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).optional(),
+  principalNotes: z.string().max(2000).optional(),
+  hasInstrumentRequest: z.boolean().optional(),
+  instrumentRequestDetails: z.string().max(2000).optional(),
+  obsPlanningPrep: observationRatingSchema.nullable().optional(),
+  obsCultureManagement: observationRatingSchema.nullable().optional(),
+  obsInstructionMusicianship: observationRatingSchema.nullable().optional(),
+  obsEngagementEvidence: observationRatingSchema.nullable().optional(),
+  obsProfessionalismGrowth: observationRatingSchema.nullable().optional(),
+  obsNotes: z.string().max(2000).optional(),
+  obsSkipReason: observationSkipReasonSchema.nullable().optional(),
+  obsSkipNotes: z.string().max(2000).optional(),
+});
+
+export async function editVisitLog(id: string, newDateIso: string, formData: unknown) {
+  const session = await auth();
+  const user = requireUser(session);
+
+  // A string is what the old two-field form sent; treat it as the note so an
+  // older client still works.
+  const parsed = editVisitSchema.safeParse(
+    typeof formData === "string" ? { notes: formData } : formData ?? {}
   );
-  const plannedEnd = new Date(plannedStart.getTime() + 60 * 60 * 1000);
+  if (!parsed.success) throw new Error(parsed.error.message);
+  const data = parsed.data;
+
+  const existing = await prisma.visit.findUnique({ where: { id }, select: { visitedById: true, plannedStartDateTime: true } });
+  if (!existing) throw new Error("Visit not found");
+  if (existing.visitedById && existing.visitedById !== user.id && user.role !== "ADMIN") {
+    throw new Error("That visit belongs to someone else");
+  }
+
+  // Moving a visit to another day would drop it out of the route it was priced
+  // against, so the day is only changed when it actually differs — and the
+  // slot within the day is preserved so the route order survives an edit.
+  const newDayKey = toAppZoneDayKey(newDateIso);
+  const currentDayKey = dayKeyInAppZone(existing.plannedStartDateTime);
+  let plannedStart = existing.plannedStartDateTime;
+  let plannedEnd: Date | undefined;
+  if (newDayKey !== currentDayKey) {
+    plannedStart = await nextSlotForDay(user.id, newDayKey);
+    plannedEnd = new Date(plannedStart.getTime() + SLOT_MS);
+  }
+
+  const skipped = data.obsSkipReason != null;
+
   const visit = await prisma.visit.update({
     where: { id },
     data: {
       plannedStartDateTime: plannedStart,
-      plannedEndDateTime: plannedEnd,
-      reason: newNotes,
+      ...(plannedEnd ? { plannedEndDateTime: plannedEnd } : {}),
+      ...(data.notes !== undefined ? { reason: data.notes || "Manual logging" } : {}),
+      ...(data.vehicle !== undefined ? { vehicle: data.vehicle } : {}),
+      ...(data.visitedWith !== undefined ? { visitedWith: data.visitedWith } : {}),
+      ...(data.principalNotes !== undefined ? { principalNotes: data.principalNotes || null } : {}),
+      ...(data.hasInstrumentRequest !== undefined
+        ? {
+            hasInstrumentRequest: data.hasInstrumentRequest,
+            instrumentRequestDetails: data.hasInstrumentRequest
+              ? data.instrumentRequestDetails || null
+              : null,
+          }
+        : {}),
+      // Ratings and a skip reason are mutually exclusive, so setting one clears
+      // the other — otherwise correcting a mislabelled visit would leave stale
+      // ratings sitting behind the reason.
+      ...(data.obsSkipReason !== undefined
+        ? {
+            obsSkipReason: data.obsSkipReason,
+            obsSkipNotes: skipped ? data.obsSkipNotes || null : null,
+            ...(skipped
+              ? {
+                  obsPlanningPrep: null,
+                  obsCultureManagement: null,
+                  obsInstructionMusicianship: null,
+                  obsEngagementEvidence: null,
+                  obsProfessionalismGrowth: null,
+                  obsNotes: null,
+                }
+              : {}),
+          }
+        : {}),
+      ...(!skipped && data.obsPlanningPrep !== undefined ? { obsPlanningPrep: data.obsPlanningPrep } : {}),
+      ...(!skipped && data.obsCultureManagement !== undefined ? { obsCultureManagement: data.obsCultureManagement } : {}),
+      ...(!skipped && data.obsInstructionMusicianship !== undefined ? { obsInstructionMusicianship: data.obsInstructionMusicianship } : {}),
+      ...(!skipped && data.obsEngagementEvidence !== undefined ? { obsEngagementEvidence: data.obsEngagementEvidence } : {}),
+      ...(!skipped && data.obsProfessionalismGrowth !== undefined ? { obsProfessionalismGrowth: data.obsProfessionalismGrowth } : {}),
+      ...(!skipped && data.obsNotes !== undefined ? { obsNotes: data.obsNotes || null } : {}),
     },
   });
   return serializeVisit(visit);

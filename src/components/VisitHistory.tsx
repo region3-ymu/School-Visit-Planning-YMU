@@ -226,11 +226,23 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     };
 
     const handleOpenEdit = (log: VisitLogRow) => {
-        setEditingId(log.id);
         resetForm();
+        setEditingId(log.id);
         setSelectedSchool(log.schoolId);
         setVisitDate(format(new Date(log.date), "yyyy-MM-dd"));
         setNotes(log.notes || "");
+        // Prefilled from what was recorded, so correcting one field doesn't wipe
+        // the rest — the whole point is fixing a visit without retyping it.
+        setMode(log.mode as typeof mode);
+        setVehicle(log.vehicle as VehicleType);
+        setVisitedWith(log.visitedWith ?? []);
+        setPrincipalNotes(log.principalNotes ?? "");
+        setHasInstrumentRequest(log.hasInstrumentRequest ?? false);
+        setInstrumentRequestDetails(log.instrumentRequestDetails ?? "");
+        setObservations({ ...EMPTY_OBSERVATIONS, ...(log.observations ?? {}) } as ObservationState);
+        setObsNotes(log.obsNotes ?? "");
+        setObsSkipReason((log.obsSkipReason as ObservationSkipReason | null) ?? null);
+        setObsSkipNotes(log.obsSkipNotes ?? "");
         setShowModal(true);
     };
 
@@ -255,7 +267,22 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
         try {
             if (editingId) {
-                await editVisitLog(editingId, isoDate, notes);
+                await editVisitLog(editingId, isoDate, {
+                    notes: notes.trim() || undefined,
+                    vehicle,
+                    visitedWith,
+                    principalNotes: showTalkAbout ? principalNotes.trim() : "",
+                    hasInstrumentRequest,
+                    instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
+                    obsPlanningPrep: observations.obsPlanningPrep,
+                    obsCultureManagement: observations.obsCultureManagement,
+                    obsInstructionMusicianship: observations.obsInstructionMusicianship,
+                    obsEngagementEvidence: observations.obsEngagementEvidence,
+                    obsProfessionalismGrowth: observations.obsProfessionalismGrowth,
+                    obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() : "",
+                    obsSkipReason: showTeacherObservation ? obsSkipReason : null,
+                    obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() : "",
+                });
             } else {
                 // Only the first in-person visit of the day needs an origin; the server
                 // chains later ones from the previous stop and ignores what we send.
@@ -632,10 +659,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                 />
                             </div>
 
-                            {/* Editing only ever changed the date and the note, so the rest of
-                                the form stays out of the way in that mode. */}
-                            {!editingId && (
-                                <>
+                            <>
+                                    {/* Mode and origin decide how the day's legs were priced, so an
+                                        edit leaves them alone — route order and repricing live in the
+                                        route editor instead. */}
+                                    {!editingId && (
                                     <div>
                                         <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">How did this visit happen?</p>
                                         <div className="flex gap-2">
@@ -664,19 +692,20 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                             </p>
                                         )}
                                     </div>
+                                    )}
 
                                     {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
                                     {/* Already have a stop that day: say what it chains from rather
                                         than asking a question whose answer the server ignores. */}
-                                    {!isRemote && chainedFrom && (
+                                    {!editingId && !isRemote && chainedFrom && (
                                         <div className="rounded-lg border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/40 p-3 text-sm text-gray-600 dark:text-gray-400">
                                             Driving from your previous stop that day:{" "}
                                             <span className="font-medium text-gray-800 dark:text-gray-200">{chainedFrom}</span>
                                         </div>
                                     )}
 
-                                    {!isRemote && !chainedFrom && !chainLoading && (
+                                    {!editingId && !isRemote && !chainedFrom && !chainLoading && (
                                         <div>
                                             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                                                 First stop that day — where did you drive from?
@@ -768,8 +797,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                         )}
                                     </div>
 
-                                </>
-                            )}
+                            </>
 
                             {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
                         </div>

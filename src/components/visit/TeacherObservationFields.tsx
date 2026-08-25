@@ -10,6 +10,7 @@ export type ObservationDomainKey =
   | "obsProfessionalismGrowth";
 
 export type ObservationSkipReason =
+  | "DID_NOT_STAY"
   | "NO_CLASS_TODAY"
   | "CLASS_CANCELLED"
   | "TEACHER_ABSENT"
@@ -42,6 +43,9 @@ export const OBSERVATION_DOMAINS: { key: ObservationDomainKey; title: string; hi
 ];
 
 export const SKIP_REASONS: { value: ObservationSkipReason; label: string }[] = [
+  // First, because it is the one where a class actually ran — the rest are all
+  // ways of there being nothing to watch.
+  { value: "DID_NOT_STAY", label: "Class ran, didn't stay" },
   { value: "NO_CLASS_TODAY", label: "No class today" },
   { value: "CLASS_CANCELLED", label: "Class cancelled" },
   { value: "TEACHER_ABSENT", label: "Teacher absent" },
@@ -117,12 +121,17 @@ export default function TeacherObservationFields({
       {!observed && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3">
           <p className="text-xs text-amber-700 dark:text-amber-400">
-            No ratings recorded for this visit — there was no lesson to observe. The visit still
-            counts, and the reason is saved.
+            {skipReason === "DID_NOT_STAY"
+              ? "No ratings recorded — the class ran, but this visit wasn't for observing it. The visit still counts, and the reason is saved."
+              : "No ratings recorded for this visit — there was no lesson to observe. The visit still counts, and the reason is saved."}
           </p>
           <input
             type="text"
-            placeholder="Anything to add? (optional)"
+            placeholder={
+              skipReason === "DID_NOT_STAY"
+                ? "What were you there for? (optional)"
+                : "Anything to add? (optional)"
+            }
             value={skipNotes}
             onChange={(e) => onSkipNotesChange(e.target.value)}
             className="w-full mt-2 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 bg-white dark:bg-zinc-800 text-sm"

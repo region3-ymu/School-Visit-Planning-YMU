@@ -330,6 +330,8 @@ enum ObservationRating {
 
 /// Why a YMU-teacher visit carries no observation ratings.
 enum ObservationSkipReason {
+  /// The class ran and the teacher was seen; this visit was for something else.
+  DID_NOT_STAY
   NO_CLASS_TODAY
   CLASS_CANCELLED
   TEACHER_ABSENT
