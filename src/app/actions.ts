@@ -1206,11 +1206,60 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
   return serializeVisit(visit);
 }
 
+/**
+ * Who actually teaches at a school, and what they teach there.
+ *
+ * Teacher.schoolId is a single column, so it can only ever name one school —
+ * whichever the import found busiest. Reading the list from it hid every teacher
+ * whose main school is elsewhere: Carrie P. Meek showed Cristian Perez and not
+ * Kevin Bodniza, though the two split Modern Band and Music Production there.
+ *
+ * The classes are the real answer, so they are what this reads. Teachers added
+ * by hand carry no classes yet and would vanish from their own school's list, so
+ * they are unioned in.
+ */
 export async function getSchoolTeachers(schoolId: string) {
-  return await prisma.teacher.findMany({
-    where: { school: { id: schoolId } },
-    orderBy: { createdAt: "desc" },
-  });
+  const [sessions, byField] = await Promise.all([
+    prisma.classSession.findMany({
+      where: { schoolId, teacherId: { not: null } },
+      select: {
+        teacher: { select: { id: true, name: true, email: true, subjects: true, externalId: true } },
+        subject: { select: { name: true } },
+      },
+    }),
+    prisma.teacher.findMany({
+      where: { schoolId },
+      select: { id: true, name: true, email: true, subjects: true, externalId: true },
+    }),
+  ]);
+
+  type Row = {
+    id: string;
+    name: string;
+    email: string | null;
+    subjects: string | null;
+    externalId: string | null;
+    subjectsHere: string[];
+    classCount: number;
+  };
+  const byId = new Map<string, Row>();
+
+  for (const s of sessions) {
+    if (!s.teacher) continue;
+    const row =
+      byId.get(s.teacher.id) ?? { ...s.teacher, subjectsHere: [] as string[], classCount: 0 };
+    row.classCount += 1;
+    if (!row.subjectsHere.includes(s.subject.name)) row.subjectsHere.push(s.subject.name);
+    byId.set(s.teacher.id, row);
+  }
+
+  for (const t of byField) {
+    if (!byId.has(t.id)) byId.set(t.id, { ...t, subjectsHere: [], classCount: 0 });
+  }
+
+  return [...byId.values()]
+    .map((t) => ({ ...t, subjectsHere: t.subjectsHere.sort() }))
+    .sort((a, b) => b.classCount - a.classCount || a.name.localeCompare(b.name));
 }
 
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {

@@ -163,6 +163,52 @@ async function main() {
   }
   console.log(`Class sessions relinked: ${relinked}`);
 
+  // Second pass: fill the gaps within a recurring class.
+  //
+  // YMU-A matches a teacher per event instance, from the attendee list, and that
+  // matching is uneven across a series — Morningside's Music Production has Omar
+  // Cuellar on some dates and nobody on others, though it is one weekly class
+  // with one teacher. Where a (school, subject) group already has a real teacher
+  // on some of its sessions, the rest of that group is the same class.
+  const groups = await prisma.classSession.groupBy({
+    by: ["schoolId", "subjectId"],
+    _count: { id: true },
+  });
+  let inferred = 0;
+  for (const g of groups) {
+    const known = await prisma.classSession.findFirst({
+      where: { schoolId: g.schoolId, subjectId: g.subjectId, teacher: { externalId: { not: null } } },
+      select: { teacherId: true },
+    });
+    if (!known?.teacherId) continue;
+    const res = await prisma.classSession.updateMany({
+      where: {
+        schoolId: g.schoolId,
+        subjectId: g.subjectId,
+        OR: [{ teacherId: null }, { teacher: { externalId: null } }],
+      },
+      data: { teacherId: known.teacherId },
+    });
+    inferred += res.count;
+  }
+  console.log(`Sessions filled in from the rest of their recurring class: ${inferred}`);
+
+  const stillUnknown = await prisma.classSession.groupBy({
+    by: ["schoolId", "subjectId"],
+    where: { OR: [{ teacherId: null }, { teacher: { externalId: null } }] },
+    _count: { id: true },
+  });
+  if (stillUnknown.length > 0) {
+    console.log(`\nClasses with no teacher anywhere in their series — needs a person named in YMU-A:`);
+    for (const u of stillUnknown) {
+      const [sc, su] = await Promise.all([
+        prisma.school.findUnique({ where: { id: u.schoolId }, select: { name: true } }),
+        prisma.subject.findUnique({ where: { id: u.subjectId }, select: { name: true } }),
+      ]);
+      console.log(`  ${(sc?.name ?? "?").padEnd(36)} ${(su?.name ?? "?").padEnd(24)} ${u._count.id}`);
+    }
+  }
+
   const orphans = await prisma.teacher.findMany({
     where: { externalId: null, classSessions: { none: {} } },
     select: { id: true, name: true },

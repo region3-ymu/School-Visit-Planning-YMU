@@ -6,12 +6,8 @@ import { Trash2, Pencil, Plus } from "lucide-react";
 import { deleteTeacher, getSchoolTeachers } from "@/app/actions";
 import { useParams } from "next/navigation";
 
-type TeacherRow = {
-  id: string;
-  name: string;
-  subjects: string | null;
-  createdAt: string;
-};
+// Derived from the action so the card can't claim a field the query doesn't select.
+type TeacherRow = Awaited<ReturnType<typeof getSchoolTeachers>>[number];
 
 export default function TeachersListPage() {
   const params = useParams<{ id: string }>();
@@ -26,8 +22,7 @@ export default function TeachersListPage() {
       return;
     }
     setLoading(true);
-    const rows = await getSchoolTeachers(schoolId);
-    setTeachers(rows as unknown as TeacherRow[]);
+    setTeachers(await getSchoolTeachers(schoolId));
     setLoading(false);
   };
 
@@ -81,9 +76,29 @@ export default function TeachersListPage() {
                   <div className="font-bold text-gray-900 dark:text-gray-100 truncate">
                     {t.name}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 whitespace-pre-wrap">
-                    {t.subjects?.trim() ? t.subjects : "—"}
-                  </div>
+                  {/* What they teach *here*, taken from the classes themselves —
+                      the same person often teaches something different elsewhere. */}
+                  {t.subjectsHere.length > 0 ? (
+                    <>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {t.subjectsHere.map((sub) => (
+                          <span
+                            key={sub}
+                            className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 text-xs font-medium"
+                          >
+                            {sub}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
+                        {t.classCount} class{t.classCount === 1 ? "" : "es"} at this school
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 whitespace-pre-wrap">
+                      {t.subjects?.trim() ? t.subjects : "Sin clases en el calendario"}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <Link
