@@ -1510,12 +1510,28 @@ export async function getTeacherProfile(teacherId: string) {
   };
 }
 
-export async function getSchoolTeachers(schoolId: string) {
+export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
   // Last year's classes are still in the database. Counting them here would
   // credit a teacher with a school they no longer serve, and inflate the class
   // counts with a year nobody is planning against.
   const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
   const yearStart = firstQuarter?.startDate;
+
+  // Several schools alternate two classes through the same slot — Charles R.
+  // Drew runs Drumline one day and Beginning Band the next, with a different
+  // teacher each. Knowing the date settles which of them was actually taught,
+  // so a visit being logged for that date can default to the right person.
+  let taughtThatDay = new Set<string>();
+  if (onDateIso) {
+    const dayKey = toAppZoneDayKey(onDateIso);
+    const dayStart = zonedDayStart(dayKey);
+    const dayEnd = zonedDayStart(addDaysToDayKey(dayKey, 1));
+    const onDay = await prisma.classSession.findMany({
+      where: { schoolId, startDateTime: { gte: dayStart, lt: dayEnd }, teacherId: { not: null } },
+      select: { teacherId: true },
+    });
+    taughtThatDay = new Set(onDay.map((c) => c.teacherId!).filter(Boolean));
+  }
 
   const [sessions, byField] = await Promise.all([
     prisma.classSession.findMany({
@@ -1543,25 +1559,40 @@ export async function getSchoolTeachers(schoolId: string) {
     externalId: string | null;
     subjectsHere: string[];
     classCount: number;
+    /** Had a class at this school on the date asked about, if one was given. */
+    teachingOnDate: boolean;
   };
   const byId = new Map<string, Row>();
 
   for (const s of sessions) {
     if (!s.teacher) continue;
     const row =
-      byId.get(s.teacher.id) ?? { ...s.teacher, subjectsHere: [] as string[], classCount: 0 };
+      byId.get(s.teacher.id) ??
+      {
+        ...s.teacher,
+        subjectsHere: [] as string[],
+        classCount: 0,
+        teachingOnDate: taughtThatDay.has(s.teacher.id),
+      };
     row.classCount += 1;
     if (!row.subjectsHere.includes(s.subject.name)) row.subjectsHere.push(s.subject.name);
     byId.set(s.teacher.id, row);
   }
 
   for (const t of byField) {
-    if (!byId.has(t.id)) byId.set(t.id, { ...t, subjectsHere: [], classCount: 0 });
+    if (!byId.has(t.id)) {
+      byId.set(t.id, { ...t, subjectsHere: [], classCount: 0, teachingOnDate: taughtThatDay.has(t.id) });
+    }
   }
 
   return [...byId.values()]
     .map((t) => ({ ...t, subjectsHere: t.subjectsHere.sort() }))
-    .sort((a, b) => b.classCount - a.classCount || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) =>
+        Number(b.teachingOnDate) - Number(a.teachingOnDate) ||
+        b.classCount - a.classCount ||
+        a.name.localeCompare(b.name)
+    );
 }
 
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {

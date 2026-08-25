@@ -156,15 +156,23 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     // Reloaded whenever the school changes; picking a different school must not
     // leave the previous school's teacher selected.
     useEffect(() => {
-        if (!selectedSchool) { setSchoolTeachers([]); setObservedTeacherId(""); return; }
+        if (!selectedSchool || !visitIso) { setSchoolTeachers([]); return; }
         let cancelled = false;
-        getSchoolTeachers(selectedSchool).then((list) => {
+        // Keyed on the date too: a school that alternates two classes through one
+        // slot has a different teacher depending on the day.
+        getSchoolTeachers(selectedSchool, visitIso).then((list) => {
             if (cancelled) return;
             setSchoolTeachers(list);
-            setObservedTeacherId((prev) => (list.some((t) => t.id === prev) ? prev : list.length === 1 ? list[0].id : ""));
+            setObservedTeacherId((prev) => {
+                if (list.some((t) => t.id === prev)) return prev;
+                // Whoever actually taught that day, else the only candidate.
+                const taught = list.filter((t) => t.teachingOnDate);
+                if (taught.length === 1) return taught[0].id;
+                return list.length === 1 ? list[0].id : "";
+            });
         });
         return () => { cancelled = true; };
-    }, [selectedSchool]);
+    }, [selectedSchool, visitIso]);
 
     const toggleVisitedWith = (value: string) =>
         setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
@@ -801,6 +809,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                     <option key={t.id} value={t.id}>
                                                         {t.name}
                                                         {t.subjectsHere.length > 0 ? ` — ${t.subjectsHere.join(", ")}` : ""}
+                                                        {t.teachingOnDate ? " (taught that day)" : ""}
                                                     </option>
                                                 ))}
                                             </select>
