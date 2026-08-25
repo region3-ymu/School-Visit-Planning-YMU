@@ -56,7 +56,19 @@ export async function getMileageReportData(
       // inflate the visit counts below.
       OR: [{ milesDriven: { not: null } }, { returnMilesDriven: { not: null } }],
       plannedStartDateTime: { gte: params.startDate, lte: params.endDate },
-      ...(params.regionId ? { school: { regionId: params.regionId } } : {}),
+      // The office belongs to no region — it serves all of them — so a plain
+      // school.regionId filter dropped every stop there. That silently removed
+      // both the payable legs *to* the office and the commute legs *from* home
+      // to it, understating a month by a third. It is included when the RM who
+      // drove it belongs to the region being reported on.
+      ...(params.regionId
+        ? {
+            OR: [
+              { school: { regionId: params.regionId } },
+              { school: { isOffice: true }, visitedBy: { regionId: params.regionId } },
+            ],
+          }
+        : {}),
       ...(params.visitedById ? { visitedById: params.visitedById } : {}),
     },
     include: {

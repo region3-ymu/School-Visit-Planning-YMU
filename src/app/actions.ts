@@ -1838,9 +1838,18 @@ export async function getOptimalRouteForDay(
     throw new Error("Select at least one school to visit");
   }
 
+  // The office is region-less on purpose — it serves every region — so a plain
+  // region filter would reject it as "not in your region" and refuse to route a
+  // day that stops there, which is most days.
   const baseWhere = schoolRegionWhere(user);
   const schools = await prisma.school.findMany({
-    where: { id: { in: schoolIds }, ...baseWhere, active: true },
+    where: {
+      id: { in: schoolIds },
+      active: true,
+      ...(baseWhere.regionId !== undefined
+        ? { OR: [{ regionId: baseWhere.regionId }, { isOffice: true }] }
+        : {}),
+    },
   });
 
   if (schools.length !== schoolIds.length) {
