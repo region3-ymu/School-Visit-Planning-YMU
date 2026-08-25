@@ -12,6 +12,7 @@ import MapZoneView from "@/components/MapZoneView";
 import VisitHistory from "@/components/VisitHistory";
 import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
+import MileageGapBanner from "@/components/MileageGapBanner";
 import {
   Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3,
 } from "lucide-react";
@@ -130,6 +131,10 @@ function HomeInner() {
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto w-full relative">
         <div className={activeTab === "map" ? "w-full min-h-full" : "max-w-7xl mx-auto w-full min-h-full"}>
+          {/* Above every tab, not tucked inside the reports one: miles go
+              missing at confirm time, and the RM who needs to know is the one
+              planning their week, not the one already opening a report. */}
+          <MileageGapBanner />
           {activeTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
           {activeTab === "planner" && <WeeklyPlanner regionFilter={selectedRegionId || null} />}
           {activeTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}

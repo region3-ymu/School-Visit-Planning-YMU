@@ -41,6 +41,22 @@ export type MileageReportData = {
     mode: string;
     vehicle: string;
   }[];
+  /**
+   * In-person visits in this window that were driven to but never measured —
+   * the routing service failed at confirm time, or no starting point was on
+   * file. They are NOT in `visits` and contribute nothing to any total: an
+   * unmeasured trip has no honest number to add, and inventing one would make
+   * it indistinguishable from a real measurement on a reimbursement.
+   *
+   * They are reported here so the report can say so out loud. Dropping them
+   * from the query and saying nothing is what let a drive disappear between
+   * confirming a visit and being paid for it.
+   */
+  unmeasured: {
+    schoolName: string;
+    visitedByName: string;
+    date: Date;
+  }[];
 };
 
 export type MileageReportParams = {
@@ -83,6 +99,25 @@ export async function getMileageReportData(
     include: {
       school: { select: { id: true, name: true, region: { select: { name: true } } } },
       visitedBy: { select: { id: true, name: true, email: true } },
+    },
+    orderBy: { plannedStartDateTime: "asc" },
+  });
+
+  // Same window and the same scoping as above, but the rows the filter there
+  // deliberately excludes: driven, and never measured.
+  const unmeasuredVisits = await prisma.visit.findMany({
+    where: {
+      status: "DONE",
+      mode: "IN_PERSON",
+      milesDriven: null,
+      returnMilesDriven: null,
+      plannedStartDateTime: { gte: params.startDate, lte: params.endDate },
+      ...(params.regionId ? { visitedBy: { regionId: params.regionId } } : {}),
+      ...(params.visitedById ? { visitedById: params.visitedById } : {}),
+    },
+    include: {
+      school: { select: { name: true } },
+      visitedBy: { select: { name: true, email: true } },
     },
     orderBy: { plannedStartDateTime: "asc" },
   });
@@ -166,6 +201,11 @@ export async function getMileageReportData(
   }
 
   return {
+    unmeasured: unmeasuredVisits.map((v) => ({
+      schoolName: v.school.name,
+      visitedByName: v.visitedBy?.name ?? v.visitedBy?.email ?? "Unknown",
+      date: v.plannedStartDateTime,
+    })),
     period: { label: params.label, startDate: params.startDate, endDate: params.endDate },
     totalMiles: Math.max(0, drivenMiles - commuteMiles),
     drivenMiles,

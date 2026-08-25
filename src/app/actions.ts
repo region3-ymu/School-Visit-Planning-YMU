@@ -1026,6 +1026,154 @@ export async function getMyDayStatus(dateIso: string) {
 }
 
 /**
+ * In-person visits of this RM's that were never given a mileage figure.
+ *
+ * Mileage is best-effort by design: computeLegMiles swallows a routing-service
+ * failure and returns null so that a visit still confirms rather than being
+ * lost with its notes. The cost of that choice was silence — the mileage report
+ * only counts visits with a measured leg, so a failed calculation did not show
+ * up as a zero or a gap, it showed up as nothing at all, and the miles were
+ * gone without anyone knowing they had been driven.
+ *
+ * No new column records this. A visit that should have miles and does not is
+ * already identifiable: it is IN_PERSON, DONE, and has no milesDriven. And
+ * whether it can be recalculated unattended is written in originLat/originLng,
+ * because the origin is resolved and stored BEFORE the distance is fetched —
+ * so a row with an origin and no miles is precisely one where the routing call
+ * is what failed.
+ */
+export type MileageGap = {
+  id: string;
+  date: Date;
+  schoolName: string;
+  originLabel: string | null;
+  /** The origin is on file, so this only needs the routing service to answer. */
+  retryable: boolean;
+};
+
+export async function getMileageGaps(): Promise<MileageGap[]> {
+  const session = await auth();
+  const user = requireUser(session);
+
+  // The RM's own driving. Mileage is owed to the person who drove it, so a gap
+  // is theirs to see and theirs to fix.
+  const gaps = await prisma.visit.findMany({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      mode: "IN_PERSON",
+      milesDriven: null,
+    },
+    select: {
+      id: true,
+      plannedStartDateTime: true,
+      originLabel: true,
+      originLat: true,
+      originLng: true,
+      school: { select: { name: true } },
+    },
+    orderBy: { plannedStartDateTime: "desc" },
+  });
+
+  return gaps.map((v) => ({
+    id: v.id,
+    date: v.plannedStartDateTime,
+    schoolName: v.school.name,
+    originLabel: v.originLabel,
+    retryable: v.originLat != null && v.originLng != null,
+  }));
+}
+
+/**
+ * Recalculate the mileage for every gap that has an origin on file.
+ *
+ * Deliberately does NOT invent a starting point for the ones that have none.
+ * A guessed origin produces a number that looks measured, goes onto a
+ * reimbursement, and cannot be told apart from a real one afterwards; an
+ * obvious gap can at least be corrected by the person who drove it.
+ */
+export async function retryMileageGaps(): Promise<{ fixed: number; remaining: number }> {
+  const session = await auth();
+  const user = requireUser(session);
+
+  const gaps = await prisma.visit.findMany({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      mode: "IN_PERSON",
+      milesDriven: null,
+      originLat: { not: null },
+      originLng: { not: null },
+    },
+    select: {
+      id: true,
+      plannedStartDateTime: true,
+      originLat: true,
+      originLng: true,
+      school: { select: { lat: true, lng: true } },
+    },
+  });
+
+  const home = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { homeLat: true, homeLng: true },
+  });
+
+  let fixed = 0;
+
+  for (const gap of gaps) {
+    if (gap.school.lat == null || gap.school.lng == null) continue;
+
+    const miles = await computeLegMiles(
+      { lat: gap.originLat!, lng: gap.originLng! },
+      { lat: gap.school.lat, lng: gap.school.lng }
+    );
+    if (miles == null) continue; // still down — the banner stays up
+
+    // Same commute rule the original calculation used: the leg counts as
+    // commute when it started at home AND nothing was driven earlier that day.
+    // Both halves matter — a school within a few streets of the RM's house
+    // would otherwise turn a mid-route leg into an unpaid one.
+    const startedAtHome =
+      home?.homeLat != null &&
+      home.homeLng != null &&
+      haversineMeters(gap.originLat!, gap.originLng!, home.homeLat, home.homeLng) <= HOME_MATCH_RADIUS_M;
+
+    const { dayStart } = dayRangeFor(gap.plannedStartDateTime);
+    const earlierThatDay = startedAtHome
+      ? await prisma.visit.count({
+          where: {
+            visitedById: user.id,
+            status: "DONE",
+            mode: "IN_PERSON",
+            plannedStartDateTime: { gte: dayStart, lt: gap.plannedStartDateTime },
+          },
+        })
+      : 0;
+
+    await prisma.visit.update({
+      where: { id: gap.id },
+      data: {
+        milesDriven: miles,
+        commuteMiles: startedAtHome && earlierThatDay === 0 ? miles : null,
+      },
+    });
+    fixed += 1;
+  }
+
+  const remaining = await prisma.visit.count({
+    where: {
+      visitedById: user.id,
+      status: "DONE",
+      mode: "IN_PERSON",
+      milesDriven: null,
+    },
+  });
+
+  return { fixed, remaining };
+}
+
+/**
  * The RM's stops for one day, in route order, for reviewing or reordering.
  */
 export async function getDayRoute(dateIso: string) {

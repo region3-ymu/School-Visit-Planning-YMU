@@ -176,6 +176,34 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
             )}
           </p>
 
+          {/* Said on the report itself, not only in the app-wide banner: this
+              is the document someone reconciles a payment against, and a total
+              that quietly excludes real driving is worse than one that admits
+              what it could not measure. */}
+          {data.unmeasured.length > 0 && (
+            <div className="mb-6 rounded-xl border-2 border-red-500 bg-red-50 dark:bg-red-950/40 p-4">
+              <p className="flex items-center gap-2 text-sm font-black text-red-700 dark:text-red-300">
+                <AlertTriangle size={18} />
+                {data.unmeasured.length} in-person visit
+                {data.unmeasured.length === 1 ? "" : "s"} in this period {data.unmeasured.length === 1 ? "is" : "are"} missing from the
+                figures above
+              </p>
+              <p className="mt-1 text-xs text-red-700/90 dark:text-red-300/90">
+                The distance was never measured for {data.unmeasured.length === 1 ? "it" : "them"}, so
+                the miles driven are not counted anywhere on this report. Use{" "}
+                <span className="font-semibold">Recalculate</span> on the red banner to recover
+                {data.unmeasured.length === 1 ? " it" : " them"}.
+              </p>
+              <ul className="mt-2 space-y-0.5 text-xs text-red-800 dark:text-red-200">
+                {data.unmeasured.map((u, i) => (
+                  <li key={i}>
+                    {format(new Date(u.date), "d MMM yyyy")} — {u.schoolName} ({u.visitedByName})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <ReportTable
             title="By Regional Manager"
             headers={["Regional Manager", "Visits", "Reimbursable", "Commute", "Van"]}
