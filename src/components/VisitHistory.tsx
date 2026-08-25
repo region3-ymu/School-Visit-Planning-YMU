@@ -519,7 +519,13 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 {expandedId === log.id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                                             </td>
                                             <td className="px-6 py-4 whitespace-nowrap text-gray-800 dark:text-gray-200">
-                                                {format(new Date(log.date), "MMM d, yyyy")}
+                                                <span className="inline-flex items-center gap-2">
+                                                    {/* Where this stop fell in that day's route. */}
+                                                    <span className="w-5 h-5 shrink-0 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-500 dark:text-gray-400 text-[10px] font-bold flex items-center justify-center">
+                                                        {log.stopNumber}
+                                                    </span>
+                                                    {format(new Date(log.date), "MMM d, yyyy")}
+                                                </span>
                                             </td>
                                             <td className="px-6 py-4 font-medium text-gray-900 dark:text-white">
                                                 {log.school.name}

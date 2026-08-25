@@ -752,11 +752,24 @@ export async function getVisitHistory(regionFilter?: string | null) {
       visitedBy: { select: { name: true, email: true } },
       observedTeacher: { select: { name: true } },
     },
-    orderBy: { plannedStartDateTime: "desc" },
+    orderBy: [{ plannedStartDateTime: "asc" }, { createdAt: "asc" }],
   });
 
+  // Newest day first, but each day read in the order it was driven: the first
+  // stop at the top, the way the route actually went. Sorting the whole list
+  // descending put every day backwards.
+  const byDay = new Map<string, typeof visits>();
+  for (const v of visits) {
+    const k = dayKeyInAppZone(v.plannedStartDateTime);
+    byDay.set(k, [...(byDay.get(k) ?? []), v]);
+  }
+  const ordered = [...byDay.entries()]
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .flatMap(([, dayVisits]) => dayVisits.map((v, i) => ({ visit: v, stopNumber: i + 1 })));
+
   // Normalize to the shape VisitHistory.tsx expects
-  return visits.map((v) => ({
+  return ordered.map(({ visit: v, stopNumber }) => ({
+    stopNumber,
     id: v.id,
     schoolId: v.schoolId,
     date: v.plannedStartDateTime,
@@ -1029,12 +1042,42 @@ export async function reorderDayVisits(dateIso: string, orderedIds: string[]) {
 
   // The day began where it began; putting a different stop first doesn't change
   // where the RM set out from, so that origin carries over to whoever is first.
-  const dayOrigin = existing.find((v) => v.originLat != null && v.originLng != null);
-  const startPoint =
-    dayOrigin?.originLat != null && dayOrigin.originLng != null
-      ? { lat: dayOrigin.originLat, lng: dayOrigin.originLng, label: dayOrigin.originLabel ?? "Start" }
+  //
+  // It has to be the *current* first stop's origin, not the first row that
+  // happens to have coordinates. After one reorder every row carries an origin —
+  // its predecessor — so searching for the first non-null one picked a school
+  // mid-route and left the day starting from a stop later in its own sequence.
+  const firstStop = existing[0];
+  let startPoint =
+    firstStop?.originLat != null && firstStop.originLng != null
+      ? { lat: firstStop.originLat, lng: firstStop.originLng, label: firstStop.originLabel ?? "Start" }
       : null;
-  const startIsCommute = (dayOrigin?.commuteMiles ?? null) != null;
+  let startIsCommute = (firstStop?.commuteMiles ?? null) != null;
+
+  // Nothing recorded for a day logged before origins were kept as coordinates.
+  // Home is the honest default: it is where a day starts unless told otherwise,
+  // and it is the case the IRS rule turns on.
+  if (!startPoint) {
+    const home = await prisma.user.findUnique({
+      where: { id: user.id },
+      select: { homeLat: true, homeLng: true },
+    });
+    if (home?.homeLat != null && home.homeLng != null) {
+      startPoint = { lat: home.homeLat, lng: home.homeLng, label: "Home" };
+      startIsCommute = true;
+    }
+  }
+
+  // A stop cannot be its own day's starting point.
+  const firstSchool = ordered.find((v) => v.school.lat != null && v.school.lng != null);
+  if (
+    startPoint &&
+    firstSchool?.school.lat != null &&
+    Math.abs(startPoint.lat - firstSchool.school.lat) < 1e-6 &&
+    Math.abs(startPoint.lng - firstSchool.school.lng!) < 1e-6
+  ) {
+    startPoint = null;
+  }
 
   const updates: {
     id: string;
