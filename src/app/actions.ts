@@ -1232,14 +1232,19 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
  * they are unioned in.
  */
 /**
- * The recurring weekly timetable a school actually runs, derived from its class
- * sessions.
+ * The programmes a school runs, one row each — not one row per weekday.
  *
- * The cards used to read School.availability, a hand-maintained JSON blob that
- * mostly said "No specific windows set" or named a legacy A/B day. The calendar
- * already knows the real thing — subject, teacher, day and time — so this reads
- * that instead. One row per distinct weekday+time+subject, however many weeks it
- * repeats for.
+ * The master schedule is written as a programme per line: "Benjamin Franklin,
+ * Drumline I, 8:48-10:10, A days, Reinaldo Velez". Listing every dated instance
+ * turned that into ten near-identical rows saying the same thing, which is
+ * unreadable on a card and hides the shape of the week.
+ *
+ * So it collapses to subject + teacher, with the time slots underneath: most
+ * schools shift on Wednesdays, and the master sheet notes that the same way
+ * ("8:48-10:10 Wed 8:45-9:51").
+ *
+ * The A/B pattern is not stored anywhere, so it isn't invented — what is shown
+ * is which weekdays a slot actually falls on, counted from the calendar.
  */
 export async function getSchoolWeeklySchedules(schoolIds: string[]) {
   const session = await auth();
@@ -1263,54 +1268,105 @@ export async function getSchoolWeeklySchedules(schoolIds: string[]) {
     orderBy: { startDateTime: "asc" },
   });
 
-  type Slot = {
-    weekday: number;
-    weekdayLabel: string;
-    start: string;
-    end: string;
+  const DAY_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  type TimeSlot = { start: string; end: string; days: string[]; occurrences: number };
+  type Programme = {
     subject: string;
     teacherName: string | null;
     teacherId: string | null;
+    slots: TimeSlot[];
     occurrences: number;
+    /** Weekdays this programme runs at all, in week order. */
+    days: string[];
+    /**
+     * "weekly" when it runs on its weekdays every week, "alternating" when it
+     * runs roughly every other one — which is what the master schedule calls A
+     * days and B days. Counted from the dates rather than labelled A or B,
+     * because nothing in the data says which letter a school considers itself
+     * on, and a guessed label reads as fact.
+     */
+    cadence: "weekly" | "alternating";
+    dates: Set<string>;
   };
-  const out: Record<string, Slot[]> = {};
-  const seen = new Map<string, Slot>();
+
+  const byProgramme = new Map<string, Programme>();
 
   for (const s of sessions) {
-    // Weekday and time in Miami, not the host's zone — the same instant is a
-    // different day either side of midnight.
     const weekdayLabel = new Intl.DateTimeFormat("en-US", {
       timeZone: APP_TIME_ZONE,
       weekday: "short",
     }).format(s.startDateTime);
-    const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(weekdayLabel);
     const start = formatTimeInAppZone(s.startDateTime);
     const end = formatTimeInAppZone(s.endDateTime);
-    // A real teacher only — a leftover calendar row is worse than no name.
+    // A real teacher only — a leftover calendar row is a school name, not a person.
     const teacher = s.teacher?.externalId ? s.teacher : null;
-    const key = `${s.schoolId}|${weekday}|${start}|${s.subject.name}|${teacher?.id ?? ""}`;
 
-    const existing = seen.get(key);
-    if (existing) {
-      existing.occurrences += 1;
-      continue;
+    const key = `${s.schoolId}|${s.subject.name}|${teacher?.id ?? ""}`;
+    const programme =
+      byProgramme.get(key) ??
+      {
+        schoolId: s.schoolId,
+        subject: s.subject.name,
+        teacherName: teacher?.name ?? null,
+        teacherId: teacher?.id ?? null,
+        slots: [] as TimeSlot[],
+        occurrences: 0,
+        days: [] as string[],
+        cadence: "weekly" as const,
+        dates: new Set<string>(),
+      };
+    programme.occurrences += 1;
+    programme.dates.add(dayKeyInAppZone(s.startDateTime));
+    if (!programme.days.includes(weekdayLabel)) programme.days.push(weekdayLabel);
+
+    const slot = programme.slots.find((t) => t.start === start && t.end === end);
+    if (slot) {
+      slot.occurrences += 1;
+      if (!slot.days.includes(weekdayLabel)) slot.days.push(weekdayLabel);
+    } else {
+      programme.slots.push({ start, end, days: [weekdayLabel], occurrences: 1 });
     }
-    const slot: Slot = {
-      weekday,
-      weekdayLabel,
-      start,
-      end,
-      subject: s.subject.name,
-      teacherName: teacher?.name ?? null,
-      teacherId: teacher?.id ?? null,
-      occurrences: 1,
-    };
-    seen.set(key, slot);
-    (out[s.schoolId] ||= []).push(slot);
+    byProgramme.set(key, programme as Programme & { schoolId: string });
+  }
+
+  // How many distinct school days the term spans, to judge a cadence against.
+  const allDates = new Set(sessions.map((s) => dayKeyInAppZone(s.startDateTime)));
+
+  const out: Record<string, Omit<Programme, "dates">[]> = {};
+  for (const [key, programme] of byProgramme) {
+    const schoolId = key.split("|")[0];
+    // A programme running on, say, Mondays in only half the weeks is on an
+    // alternating cycle. Judged per weekday so a Wednesday-only class isn't
+    // mistaken for one.
+    const perWeekday = new Map<string, number>();
+    for (const d of programme.dates) {
+      const wd = new Intl.DateTimeFormat("en-US", { timeZone: APP_TIME_ZONE, weekday: "short" })
+        .format(zonedDayStart(d));
+      perWeekday.set(wd, (perWeekday.get(wd) ?? 0) + 1);
+    }
+    const weeksInTerm = new Set(
+      [...allDates].map((d) => mondayOfDayKey(d))
+    ).size;
+    const ratios = [...perWeekday.values()].map((n) => n / Math.max(1, weeksInTerm));
+    const typical = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 1;
+    programme.cadence = typical < 0.75 ? "alternating" : "weekly";
+    const sortDays = (d: string[]) => d.sort((a, b) => DAY_ORDER.indexOf(a) - DAY_ORDER.indexOf(b));
+    programme.days = sortDays(programme.days);
+    // The dominant slot first; a Wednesday variant reads as the exception it is.
+    programme.slots = programme.slots
+      .map((t) => ({ ...t, days: sortDays(t.days) }))
+      .sort((a, b) => b.occurrences - a.occurrences || a.start.localeCompare(b.start));
+    const { dates: _dates, ...rest } = programme;
+    void _dates;
+    (out[schoolId] ||= []).push(rest);
   }
 
   for (const list of Object.values(out)) {
-    list.sort((a, b) => a.weekday - b.weekday || a.start.localeCompare(b.start));
+    list.sort(
+      (a, b) => (a.slots[0]?.start ?? "").localeCompare(b.slots[0]?.start ?? "") ||
+        a.subject.localeCompare(b.subject)
+    );
   }
   return out;
 }

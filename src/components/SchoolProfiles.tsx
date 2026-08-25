@@ -45,7 +45,11 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredSchools.map((school) => (
                     <div key={school.id} className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-gray-100 dark:border-zinc-800 shadow-sm relative overflow-hidden hover:border-indigo-500 transition-colors">
-                        <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-2">{school.name}</h3>
+                        <Link href={`/schools/${school.id}`} className="block group">
+                            <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                                {school.name}
+                            </h3>
+                        </Link>
 
                         <div className="flex items-center text-sm text-gray-500 mb-4">
                             <MapPin size={16} className="mr-1" /> Zip: {school.zipCode}
@@ -60,24 +64,30 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
                                 <span className="text-xs text-gray-500">No classes on the calendar.</span>
                             ) : (
                                 <div className="space-y-1.5">
-                                    {(schedules[school.id] ?? []).map((slot, idx) => (
-                                        <div key={idx} className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-zinc-950 p-2 rounded-md border border-gray-100 dark:border-zinc-800">
-                                            <div className="flex items-center gap-2 min-w-0">
-                                                <span className="px-1.5 py-0.5 rounded font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400 shrink-0">
-                                                    {slot.weekdayLabel}
+                                    {(schedules[school.id] ?? []).map((prog, idx) => (
+                                        <div key={idx} className="text-xs bg-gray-50 dark:bg-zinc-950 p-2 rounded-md border border-gray-100 dark:border-zinc-800">
+                                            <div className="flex items-baseline justify-between gap-2">
+                                                <span className="font-semibold text-gray-700 dark:text-gray-300 truncate" title={prog.subject}>
+                                                    {prog.subject}
                                                 </span>
-                                                <span className="min-w-0">
-                                                    <span className="block font-semibold text-gray-700 dark:text-gray-300 truncate" title={slot.subject}>
-                                                        {slot.subject}
-                                                    </span>
-                                                    {slot.teacherName && (
-                                                        <span className="block text-[10px] text-gray-500 truncate">{slot.teacherName}</span>
-                                                    )}
+                                                <span className={`px-1.5 py-0.5 rounded font-bold shrink-0 ${
+                                                    prog.cadence === "alternating"
+                                                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400"
+                                                        : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-400"
+                                                }`} title={prog.cadence === "alternating" ? "Runs every other week — the master schedule's A/B days" : "Runs every week"}>
+                                                    {prog.cadence === "alternating" ? "alt weeks" : "weekly"}
                                                 </span>
                                             </div>
-                                            <span className="text-gray-500 font-mono text-[10px] shrink-0">
-                                                {slot.start}-{slot.end}
-                                            </span>
+                                            {prog.teacherName && (
+                                                <div className="text-[10px] text-gray-500 truncate">{prog.teacherName}</div>
+                                            )}
+                                            {/* One line per time, because Wednesdays usually shift. */}
+                                            {prog.slots.map((slot, si) => (
+                                                <div key={si} className="flex justify-between text-[10px] text-gray-500 font-mono">
+                                                    <span>{slot.days.join(" ")}</span>
+                                                    <span>{slot.start}-{slot.end}</span>
+                                                </div>
+                                            ))}
                                         </div>
                                     ))}
                                 </div>

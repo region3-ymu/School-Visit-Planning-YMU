@@ -73,9 +73,15 @@ export default function TeachersListPage() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="font-bold text-gray-900 dark:text-gray-100 truncate">
+                  {/* The name opens the teacher's own page — their schools,
+                      their classes, and every observation of them. The pencil
+                      still edits this school's record of them. */}
+                  <Link
+                    href={`/teachers/${t.id}`}
+                    className="font-bold text-gray-900 dark:text-gray-100 truncate block hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                  >
                     {t.name}
-                  </div>
+                  </Link>
                   {/* What they teach *here*, taken from the classes themselves —
                       the same person often teaches something different elsewhere. */}
                   {t.subjectsHere.length > 0 ? (

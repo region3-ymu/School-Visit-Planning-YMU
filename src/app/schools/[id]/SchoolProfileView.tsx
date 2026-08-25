@@ -9,8 +9,6 @@ import VisitDetails from "@/components/visit/VisitDetails";
 
 type Profile = NonNullable<Awaited<ReturnType<typeof getSchoolProfile>>>;
 
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
-
 function Card({ children }: { children: React.ReactNode }) {
   return (
     <div className="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl p-5">
@@ -41,7 +39,7 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
   if (!data) return <Card>School not found.</Card>;
 
   const { school, schedule, teachers, visits } = data;
-  const byDay = DAYS.map((d) => ({ day: d, slots: schedule.filter((s) => s.weekdayLabel === d) }));
+
 
   return (
     <div className="space-y-4">
@@ -68,35 +66,43 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
             No classes on the calendar for this school year.
           </p>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            {byDay.map(({ day, slots }) => (
-              <div key={day}>
-                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">{day}</p>
-                {slots.length === 0 ? (
-                  <p className="text-xs text-gray-400">—</p>
-                ) : (
-                  <div className="space-y-1.5">
-                    {slots.map((s, i) => (
-                      <div
-                        key={i}
-                        className="rounded-lg border border-gray-200 dark:border-zinc-700 p-2"
-                      >
-                        <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{s.subject}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {s.start}–{s.end}
-                        </p>
-                        {s.teacherName && (
-                          <Link
-                            href={`/teachers/${s.teacherId}`}
-                            className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                          >
-                            {s.teacherName}
-                          </Link>
-                        )}
-                      </div>
-                    ))}
-                  </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {schedule.map((prog, i) => (
+              <div key={i} className="rounded-lg border border-gray-200 dark:border-zinc-700 p-3">
+                <div className="flex items-baseline justify-between gap-2">
+                  <p className="text-sm font-medium text-gray-800 dark:text-gray-100">{prog.subject}</p>
+                  <span
+                    className={`text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 ${
+                      prog.cadence === "alternating"
+                        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400"
+                        : "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400"
+                    }`}
+                    title={
+                      prog.cadence === "alternating"
+                        ? "Runs every other week — what the master schedule calls A/B days"
+                        : "Runs every week"
+                    }
+                  >
+                    {prog.cadence === "alternating" ? "alternating weeks" : "every week"}
+                  </span>
+                </div>
+                {prog.teacherName && (
+                  <Link
+                    href={`/teachers/${prog.teacherId}`}
+                    className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                  >
+                    {prog.teacherName}
+                  </Link>
                 )}
+                {/* Separate lines because most schools shift on Wednesdays. */}
+                <div className="mt-1.5 space-y-0.5">
+                  {prog.slots.map((slot, si) => (
+                    <div key={si} className="flex justify-between text-xs text-gray-500 dark:text-gray-400">
+                      <span>{slot.days.join(" ")}</span>
+                      <span className="font-mono">{slot.start}–{slot.end}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
