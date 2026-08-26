@@ -73,8 +73,8 @@ export default function DayRouteModal({
   );
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4">
-      <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800 max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800 max-h-[90dvh] flex flex-col">
         <div className="p-5 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center shrink-0">
           <h3 className="font-bold text-gray-800 dark:text-gray-100 flex items-center gap-2">
             <Route size={18} className="text-indigo-600 dark:text-indigo-400" />

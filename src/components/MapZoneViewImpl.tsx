@@ -276,10 +276,15 @@ export default function MapZoneViewImpl() {
   const displayStops: RouteLeg[] = route?.stops ?? [];
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] min-h-[600px] p-4 gap-4">
+    // 100vh here was measured against the URL-bar-hidden viewport and then floored
+    // at 600px, so on a phone the panel below the map was pushed off the screen
+    // with no way to scroll to it. dvh plus a floor a phone can actually satisfy;
+    // the desktop figure is unchanged. The mobile top bar takes its own 3rem,
+    // which is why the two subtractions differ.
+    <div className="flex flex-col h-[calc(100dvh-11rem)] min-h-[420px] md:h-[calc(100dvh-8rem)] md:min-h-[600px] p-3 sm:p-4 gap-3 sm:gap-4">
       <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
         {/* Map — 60% landscape */}
-        <div className="lg:w-[60%] flex-1 min-h-[300px] bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm relative z-0">
+        <div className="lg:w-[60%] flex-1 min-h-[240px] sm:min-h-[300px] bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm relative z-0">
           <MapContainer
             center={mapCenter}
             zoom={11}

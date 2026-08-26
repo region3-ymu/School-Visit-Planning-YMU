@@ -392,10 +392,10 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     ];
 
     return (
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-4 sm:space-y-0">
                 <div>
-                    <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 flex items-center">
+                    <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100 flex items-center">
                         <History className="mr-2 text-indigo-600 dark:text-indigo-400" />
                         Visit History
                     </h2>
@@ -620,8 +620,8 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
             {/* Manual Log Modal */}
             {showModal && (
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4">
-                    <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800 max-h-[90vh] flex flex-col">
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                    <div className="bg-white dark:bg-zinc-900 w-full max-w-lg rounded-xl shadow-xl overflow-hidden border border-gray-100 dark:border-zinc-800 max-h-[90dvh] flex flex-col">
                         <div className="p-6 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center shrink-0">
                             <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100">
                                 {editingId ? "Edit Visit Log" : "Log Manual Visit"}

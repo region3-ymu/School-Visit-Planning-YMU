@@ -17,8 +17,8 @@ export default async function SchoolLayout({
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100">
-      <div className="max-w-5xl mx-auto p-6">
+    <div className="min-h-dvh bg-gray-50 dark:bg-[#0a0a0a] text-gray-900 dark:text-gray-100">
+      <div className="max-w-5xl mx-auto p-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-[calc(1rem+env(safe-area-inset-bottom))] sm:p-6 sm:pt-6">
         <div className="flex items-center justify-between mb-4">
           <Link
             href="/"

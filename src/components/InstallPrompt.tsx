@@ -84,7 +84,7 @@ export default function InstallPrompt() {
   if (dismissed || (!deferredPrompt && !iosPrompt)) return null;
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-50 mx-auto flex w-full max-w-md flex-col gap-2 bg-indigo-600 p-4 text-white shadow-lg sm:bottom-4 sm:rounded-2xl">
+    <div className="fixed inset-x-0 bottom-0 z-50 mx-auto flex w-full max-w-md flex-col gap-2 bg-indigo-600 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-white shadow-lg sm:bottom-4 sm:rounded-2xl sm:pb-4">
       <p className="flex items-center gap-2 text-sm font-bold">
         <Smartphone size={16} aria-hidden />
         Install SVP

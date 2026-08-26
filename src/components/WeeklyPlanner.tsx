@@ -328,13 +328,13 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
     return (
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
 
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-4 sm:space-y-0">
 
-                <div className="flex items-center space-x-4">
+                <div className="flex flex-wrap items-center gap-3">
 
-                    <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Weekly Route Plan</h2>
+                    <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100">Weekly Route Plan</h2>
 
                     <div className="flex items-center bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg overflow-hidden">
 
@@ -360,7 +360,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                 </div>
 
-                <div className="flex items-center space-x-4">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:gap-3">
 
                     <div className="flex items-center space-x-2 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-lg px-3 py-1.5">
 
@@ -699,7 +699,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                                                 title="Confirm Visit"
 
-                                                                className="p-1.5 text-emerald-600 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 rounded-lg transition-colors"
+                                                                className="p-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center text-emerald-600 bg-emerald-50 hover:bg-emerald-100 dark:text-emerald-400 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/50 rounded-lg transition-colors"
 
                                                             >
 
@@ -715,7 +715,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                                                 title="Postpone"
 
-                                                                className="p-1.5 text-amber-600 bg-amber-50 hover:bg-amber-100 dark:text-amber-400 dark:bg-amber-900/30 dark:hover:bg-amber-900/50 rounded-lg transition-colors"
+                                                                className="p-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center text-amber-600 bg-amber-50 hover:bg-amber-100 dark:text-amber-400 dark:bg-amber-900/30 dark:hover:bg-amber-900/50 rounded-lg transition-colors"
 
                                                             >
 
@@ -731,7 +731,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                                                 title="Delete"
 
-                                                                className="p-1.5 text-red-600 bg-red-50 hover:bg-red-100 dark:text-red-400 dark:bg-red-900/30 dark:hover:bg-red-900/50 rounded-lg transition-colors"
+                                                                className="p-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center text-red-600 bg-red-50 hover:bg-red-100 dark:text-red-400 dark:bg-red-900/30 dark:hover:bg-red-900/50 rounded-lg transition-colors"
 
                                                             >
 
@@ -788,9 +788,9 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
             {postponeModalData && (
 
-                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4">
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex justify-center items-center z-50 p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 
-                    <div className="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-xl shadow-xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                    <div className="bg-white dark:bg-zinc-900 w-full max-w-sm rounded-xl shadow-xl overflow-y-auto max-h-[90dvh] animate-in fade-in zoom-in duration-200">
 
                         <div className="p-4 border-b border-gray-100 dark:border-zinc-800 flex justify-between items-center bg-gray-50 dark:bg-zinc-800/50">
 
@@ -936,9 +936,9 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
             {isAddModalOpen && (
 
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pb-[max(1rem,env(safe-area-inset-bottom))] bg-black/60 backdrop-blur-sm">
 
-                    <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden border border-gray-100 dark:border-zinc-800">
+                    <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-md overflow-y-auto max-h-[90dvh] border border-gray-100 dark:border-zinc-800">
 
                         <div className="flex justify-between items-center p-5 border-b border-gray-100 dark:border-zinc-800 bg-gray-50/50 dark:bg-zinc-800/20">
 

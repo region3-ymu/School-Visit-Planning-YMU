@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 // render with no server and no session.
 export default function OfflinePage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-gray-50 p-8 text-center dark:bg-[#0a0a0a]">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-gray-50 p-6 text-center dark:bg-[#0a0a0a]">
       <CloudOff size={40} className="text-gray-400 dark:text-gray-500" aria-hidden />
       <h1 className="text-xl font-black tracking-tight text-indigo-600 dark:text-indigo-400">
         You&apos;re offline

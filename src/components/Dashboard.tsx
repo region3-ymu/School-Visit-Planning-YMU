@@ -18,8 +18,8 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
     }, [regionFilter]);
 
     return (
-        <div className="p-6">
-            <h2 className="text-2xl font-bold mb-6 text-gray-800 dark:text-gray-100">Overview Dashboard</h2>
+        <div className="p-4 sm:p-6">
+            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-gray-800 dark:text-gray-100">Overview Dashboard</h2>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                 <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl shadow-sm border border-gray-100 dark:border-zinc-800 flex items-center space-x-4">
@@ -28,7 +28,7 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                     </div>
                     <div>
                         <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Active Schools</p>
-                        <p className="text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.totalActiveSchools}</p>
+                        <p className="text-2xl sm:text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.totalActiveSchools}</p>
                     </div>
                 </div>
 
@@ -38,7 +38,7 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                     </div>
                     <div>
                         <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Due This Week</p>
-                        <p className="text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.dueThisWeek}</p>
+                        <p className="text-2xl sm:text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.dueThisWeek}</p>
                     </div>
                 </div>
 
@@ -48,7 +48,7 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                     </div>
                     <div>
                         <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Overdue</p>
-                        <p className="text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.overdue}</p>
+                        <p className="text-2xl sm:text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.overdue}</p>
                     </div>
                 </div>
 
@@ -58,7 +58,7 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                     </div>
                     <div>
                         <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Recent Cancellations</p>
-                        <p className="text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.recentCancellations}</p>
+                        <p className="text-2xl sm:text-3xl font-semibold text-gray-800 dark:text-gray-100">{stats.recentCancellations}</p>
                     </div>
                 </div>
             </div>

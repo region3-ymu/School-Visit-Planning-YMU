@@ -117,7 +117,7 @@ export default function SwUpdatePrompt() {
   if (!updateReady) return null;
 
   return (
-    <div className="fixed inset-x-0 top-0 z-[60] mx-auto flex w-full max-w-md items-center justify-between gap-3 bg-indigo-600 px-4 py-3 text-white shadow-lg sm:top-4 sm:rounded-full">
+    <div className="fixed inset-x-0 top-0 z-[60] mx-auto flex w-full max-w-md items-center justify-between gap-3 bg-indigo-600 px-4 py-3 pt-[max(0.75rem,env(safe-area-inset-top))] text-white shadow-lg sm:top-4 sm:rounded-full sm:pt-3">
       <span className="flex items-center gap-2 text-sm font-semibold">
         <RefreshCw size={16} aria-hidden />
         A new version is available.

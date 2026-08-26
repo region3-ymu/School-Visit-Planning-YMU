@@ -149,7 +149,7 @@ export default function TeacherObservationFields({
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{domain.title}</span>
                   <span className="text-[11px] text-gray-400 text-right shrink-0">{domain.hint}</span>
                 </div>
-                <div className="grid grid-cols-4 gap-1.5">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                   {RATING_OPTIONS.map((opt) => (
                     <button
                       key={opt.value}
