@@ -1,5 +1,6 @@
 import { Session } from "next-auth";
 import { Role } from "@prisma/client";
+import { seesAllRegions } from "@/lib/permissions";
 
 type SessionUser = Session["user"];
 
@@ -22,12 +23,17 @@ export function requireUser(
  * the 11 un-assigned seed schools instead of the user's real region.
  *
  * Rules:
- *   ADMIN                  → undefined  (see everything)
+ *   sees all regions       → undefined  (see everything)
  *   RM / MENTOR with region → user.regionId  (see own region)
  *   any role, no region    → undefined  (no accidental IS-NULL filter)
+ *
+ * "Sees all regions" is asked of src/lib/permissions.ts rather than compared
+ * against ADMIN here: the oversight roles and the Afterschool Manager all see
+ * every region too, and this helper is the one place that decides it for every
+ * School query in the app.
  */
 export function scopeToRegion(user: SessionUser): string | undefined {
-  if (user.role === "ADMIN") return undefined;
+  if (seesAllRegions(user.role)) return undefined;
   return user.regionId ?? undefined;
 }
 

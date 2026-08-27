@@ -275,9 +275,21 @@ model Visit {
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 enum Role {
+  /// Administers the app itself: calendar sync, accounts, correcting bad data.
   ADMIN
+  /// Owns one region's schools and the cadence they are visited on.
   REGIONAL_MANAGER
-  AFTER_SCHOOL_MANAGER // stub — no granted permissions yet
+  /// Owns afterschool programmes across EVERY region, so carries no regionId.
+  /// Not a REGIONAL_MANAGER with a null region: null there means "not assigned
+  /// yet", and the two must not be confused by a query. Mirrors YMU-A's
+  /// afterschool_manager, which exists for the same reason.
+  AFTER_SCHOOL_MANAGER
+  /// Oversight. See everything, plan nothing — the three of them are the same
+  /// set of permissions with three names, and the only reason there are three
+  /// is the org chart. Kept apart anyway so a report can say who looked.
+  CPO
+  OPERATIONS_MANAGER
+  ACADEMIC_MANAGER
   MENTOR
   INTERVENTIONIST
 }

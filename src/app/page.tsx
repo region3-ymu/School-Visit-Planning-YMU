@@ -13,6 +13,7 @@ import VisitHistory from "@/components/VisitHistory";
 import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
 import MileageGapBanner from "@/components/MileageGapBanner";
+import { canFilterByRegion, tabsForRole } from "@/lib/permissions";
 import {
   Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3, Menu, X,
 } from "lucide-react";
@@ -23,8 +24,11 @@ function HomeInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const isAdmin = session?.user?.role === "ADMIN";
-  const isRM = session?.user?.role === "REGIONAL_MANAGER";
+  const role = session?.user?.role;
+  // Any role that sees every region gets the region picker — the oversight
+  // roles and the Afterschool Manager, not only ADMIN.
+  const canPickRegion = role ? canFilterByRegion(role) : false;
+  const isRM = role === "REGIONAL_MANAGER";
 
   const [regions, setRegions] = useState<{ id: string; name: string; code: string }[]>([]);
   const selectedRegionId = searchParams.get("region") ?? "";
@@ -34,10 +38,10 @@ function HomeInner() {
   const [navOpen, setNavOpen] = useState(false);
 
   useEffect(() => {
-    if (isAdmin) {
+    if (canPickRegion) {
       getRegions().then(setRegions);
     }
-  }, [isAdmin]);
+  }, [canPickRegion]);
 
   const handleRegionChange = (regionId: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -49,14 +53,28 @@ function HomeInner() {
     router.push(`?${params.toString()}`);
   };
 
-  const navItems = [
-    { id: "dashboard", label: "Dashboard", icon: Compass },
-    { id: "planner", label: "Weekly Planner", icon: CalendarDays },
-    { id: "history", label: "Visit History", icon: History },
-    { id: "profiles", label: "Schools", icon: Users },
-    { id: "map", label: "Zone Map", icon: MapIcon },
-    { id: "reports", label: "Reports", icon: BarChart3 },
-  ] as const;
+  const TABS = {
+    dashboard: { label: "Dashboard", icon: Compass },
+    planner: { label: "Weekly Planner", icon: CalendarDays },
+    history: { label: "Visit History", icon: History },
+    profiles: { label: "Schools", icon: Users },
+    map: { label: "Zone Map", icon: MapIcon },
+    reports: { label: "Reports", icon: BarChart3 },
+  } as const;
+
+  // Which tabs this role gets, and in what order — src/lib/permissions.ts
+  // decides, so the nav and the server agree about who may do what. Oversight
+  // roles have no Weekly Planner and no Zone Map: those two screens exist to
+  // decide and drive somebody's week.
+  const allowedTabs = role ? tabsForRole(role) : ["dashboard" as const];
+  const navItems = allowedTabs.map((id) => ({ id, ...TABS[id] }));
+
+  // activeTab is persisted in localStorage, so somebody who was an RM last week
+  // — or who simply shares a browser — can arrive with a tab their role no
+  // longer has. Without this they would land on a blank pane.
+  const currentTab = allowedTabs.includes(activeTab as (typeof allowedTabs)[number])
+    ? activeTab
+    : allowedTabs[0];
 
   return (
     // h-dvh, not h-screen: on mobile Safari 100vh is the viewport with the URL
@@ -97,7 +115,7 @@ function HomeInner() {
           </h1>
 
           {/* Region selector / label */}
-          {isAdmin && regions.length > 0 ? (
+          {canPickRegion && regions.length > 0 ? (
             <div className="mt-3 relative">
               <select
                 value={selectedRegionId}
@@ -121,7 +139,7 @@ function HomeInner() {
         <nav className="flex-1 overflow-y-auto p-4 space-y-2">
           {navItems.map(item => {
             const Icon = item.icon;
-            const isActive = activeTab === item.id;
+            const isActive = currentTab === item.id;
             return (
               <button
                 key={item.id}
@@ -193,17 +211,17 @@ function HomeInner() {
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto w-full relative pb-[env(safe-area-inset-bottom)]">
-          <div className={activeTab === "map" ? "w-full min-h-full lg:h-full" : "max-w-7xl mx-auto w-full min-h-full"}>
+          <div className={currentTab === "map" ? "w-full min-h-full lg:h-full" : "max-w-7xl mx-auto w-full min-h-full"}>
           {/* Above every tab, not tucked inside the reports one: miles go
               missing at confirm time, and the RM who needs to know is the one
               planning their week, not the one already opening a report. */}
           <MileageGapBanner />
-          {activeTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
-          {activeTab === "planner" && <WeeklyPlanner regionFilter={selectedRegionId || null} />}
-          {activeTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
-          {activeTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
-          {activeTab === "map" && <MapZoneView />}
-          {activeTab === "reports" && <MileageReports regionFilter={selectedRegionId || null} />}
+          {currentTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
+          {currentTab === "planner" && <WeeklyPlanner regionFilter={selectedRegionId || null} />}
+          {currentTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
+          {currentTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
+          {currentTab === "map" && <MapZoneView />}
+          {currentTab === "reports" && <MileageReports regionFilter={selectedRegionId || null} />}
           </div>
         </main>
       </div>

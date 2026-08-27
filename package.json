@@ -17,6 +17,7 @@
     "apply-geocoding-corrections": "npx tsx scripts/apply-geocoding-corrections.ts",
     "build-distance-matrix": "npx tsx scripts/build-distance-matrix.ts",
     "create-user": "npx tsx scripts/create-user.ts",
+    "list-users": "npx tsx scripts/list-users.ts",
     "sync-calendars:test": "npx tsx scripts/sync-calendars-test.ts",
     "dedupe-schools": "npx tsx scripts/dedupe-schools.ts",
     "verify-geocoding": "npx tsx scripts/verify-geocoding.ts",

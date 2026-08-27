@@ -6,6 +6,7 @@ import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { renderMileagePdf } from "@/lib/reports/renderMileagePdf";
 import { renderMileageCsv } from "@/lib/reports/renderMileageCsv";
+import { canFilterByRegion, canSeeOthersReports } from "@/lib/permissions";
 
 const VALID_PRESETS: RangePreset[] = ["week", "month", "quarter", "3months", "6months", "year", "custom"];
 
@@ -38,12 +39,12 @@ export async function GET(request: NextRequest) {
   // Whose driving, not whose schools: an RM is owed for every mile they put in,
   // including at another region's school and at the region-less office.
   // Admins may scope to any region; everyone else is pinned to their own.
-  const regionId = user.role === "ADMIN" ? regionIdParam ?? undefined : scopeToRegion(user);
+  const regionId = canFilterByRegion(user.role) ? regionIdParam ?? undefined : scopeToRegion(user);
 
   // Only ADMIN and REGIONAL_MANAGER may read someone else's mileage. Anyone else
   // asking for a specific RM is silently narrowed to themselves rather than
   // being handed another person's record.
-  const canSeeOthers = user.role === "ADMIN" || user.role === "REGIONAL_MANAGER";
+  const canSeeOthers = canSeeOthersReports(user.role);
   const visitedById = canSeeOthers ? userIdParam ?? undefined : user.id;
 
   try {

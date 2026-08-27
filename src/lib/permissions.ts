@@ -1,0 +1,125 @@
+import type { Role } from "@prisma/client";
+
+/**
+ * Who can do what, in one place.
+ *
+ * Before this, "can they?" was answered by `user.role === "ADMIN"` written out
+ * fifteen times across actions.ts, two API routes and the nav. That works while
+ * there are two kinds of user and stops working the moment there are seven: the
+ * question is never really "are they an admin", it is "do they see every region"
+ * or "are they allowed to change this", and those are different questions that
+ * happened to have the same answer.
+ *
+ * YMU-A learned the same lesson the expensive way — twenty-one RLS policies each
+ * naming the global roles by hand, which had drifted so that "sees everything"
+ * meant different things on different tables (its migration 0072). One function
+ * per question, and every caller asks it.
+ */
+
+/**
+ * Oversight: the CPO, Operations, Academic Manager and the app Admin.
+ *
+ * They read the whole organisation and plan none of it. Three of them are the
+ * same permission set under three names because that is the org chart; kept as
+ * distinct roles so a report can say whose login it was.
+ */
+export const OVERSIGHT_ROLES: Role[] = ["ADMIN", "CPO", "OPERATIONS_MANAGER", "ACADEMIC_MANAGER"];
+
+/** The roles that actually go out and visit schools. */
+export const FIELD_ROLES: Role[] = ["REGIONAL_MANAGER", "AFTER_SCHOOL_MANAGER"];
+
+/**
+ * Sees every region rather than just their own.
+ *
+ * AFTER_SCHOOL_MANAGER is in here and is NOT oversight: they run afterschool
+ * programmes in every region, so they need the whole map and they do their own
+ * planning. That is why the role exists instead of a regional manager with a
+ * null region — null means "not assigned yet", and a query cannot tell the two
+ * apart.
+ */
+export function seesAllRegions(role: Role): boolean {
+  return OVERSIGHT_ROLES.includes(role) || role === "AFTER_SCHOOL_MANAGER";
+}
+
+/** Reads the region filter on the dashboard, history and reports. */
+export function canFilterByRegion(role: Role): boolean {
+  return seesAllRegions(role);
+}
+
+/**
+ * Plans and records visits: the weekly planner, the zone map, confirming a
+ * visit, logging one by hand, reordering a day.
+ *
+ * Oversight roles are deliberately excluded. They can see every plan and every
+ * visit; what they must not do is change somebody else's week — a CPO
+ * confirming a visit they did not make would put miles on an RM's
+ * reimbursement.
+ */
+export function canPlanVisits(role: Role): boolean {
+  return FIELD_ROLES.includes(role);
+}
+
+/**
+ * Edits school-level records: teachers and visit rules.
+ *
+ * ADMIN is included because keeping the roster right is administration, not
+ * planning. The other oversight roles are not.
+ */
+export function canManageSchoolData(role: Role): boolean {
+  return canPlanVisits(role) || role === "ADMIN";
+}
+
+/**
+ * Corrects or deletes a visit somebody else recorded.
+ *
+ * ADMIN only, and it is not the same permission as planning: fixing a visit
+ * logged against the wrong school is the job, whereas creating one is not.
+ */
+export function canEditOthersVisits(role: Role): boolean {
+  return role === "ADMIN";
+}
+
+/** Sees other people's mileage, not only their own. */
+export function canSeeOthersReports(role: Role): boolean {
+  return seesAllRegions(role) || role === "REGIONAL_MANAGER";
+}
+
+/** Runs the calendar sync and other app plumbing. */
+export function canAdministerApp(role: Role): boolean {
+  return role === "ADMIN";
+}
+
+export const TAB_IDS = ["dashboard", "planner", "history", "profiles", "map", "reports"] as const;
+export type TabId = (typeof TAB_IDS)[number];
+
+/**
+ * The tabs a role gets, in the order they appear.
+ *
+ * Oversight roles have no Weekly Planner and no Zone Map. That is YMU's own
+ * call (2026-08-31): those two screens exist to decide and drive somebody's
+ * week, and nobody who is not driving it should be in there. What they need
+ * instead is Visit History — the report — and mileage, so those come first.
+ */
+export function tabsForRole(role: Role): TabId[] {
+  if (canPlanVisits(role)) {
+    return ["dashboard", "planner", "history", "profiles", "map", "reports"];
+  }
+  if (OVERSIGHT_ROLES.includes(role)) {
+    return ["dashboard", "history", "reports", "profiles"];
+  }
+  // MENTOR / INTERVENTIONIST: read the schools they work with and their own
+  // history. Both are stubs with no workflow of their own yet.
+  return ["dashboard", "history", "profiles"];
+}
+
+/** Human labels, for the account list and for telling somebody what they are. */
+export const ROLE_LABELS: Record<Role, string> = {
+  ADMIN: "App Administrator",
+  REGIONAL_MANAGER: "Regional Manager",
+  AFTER_SCHOOL_MANAGER: "Afterschool Manager",
+  CPO: "Chief Program Officer",
+  OPERATIONS_MANAGER: "Operations Manager",
+  ACADEMIC_MANAGER: "Academic Manager",
+  MENTOR: "Mentor",
+  INTERVENTIONIST: "Interventionist",
+};

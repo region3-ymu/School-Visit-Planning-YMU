@@ -17,6 +17,14 @@ import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClien
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
+import {
+  canEditOthersVisits,
+  canFilterByRegion,
+  canManageSchoolData,
+  canPlanVisits,
+  canSeeOthersReports,
+  seesAllRegions,
+} from "@/lib/permissions";
 import { haversineMeters } from "@/lib/geo";
 import {
   APP_TIME_ZONE,
@@ -45,7 +53,7 @@ export async function getDashboardStats(regionFilter?: string | null) {
   const user = requireUser(session);
   const baseWhere = schoolRegionWhere(user);
   const regionWhere =
-    user.role === "ADMIN" && regionFilter
+    canFilterByRegion(user.role) && regionFilter
       ? { regionId: regionFilter }
       : baseWhere;
 
@@ -156,7 +164,7 @@ export async function getDashboardStats(regionFilter?: string | null) {
       status: "DONE",
       obsSkipReason: "CLASS_CANCELLED",
       plannedStartDateTime: { gte: addDays(today, -CANCELLATION_WINDOW_DAYS) },
-      ...(user.role === "ADMIN" && regionFilter
+      ...(canFilterByRegion(user.role) && regionFilter
         ? { school: { regionId: regionFilter } }
         : { visitedById: user.id }),
     },
@@ -173,7 +181,7 @@ export async function getDashboardStats(regionFilter?: string | null) {
   // means their own. Composed as one object rather than spread over a `school`
   // key that is already set — that silently drops the isOffice filter.
   const weekScope =
-    user.role === "ADMIN" && regionFilter
+    canFilterByRegion(user.role) && regionFilter
       ? { school: { isOffice: false, regionId: regionFilter } }
       : { school: { isOffice: false }, visitedById: user.id };
 
@@ -214,7 +222,7 @@ export async function getSchools(regionFilter?: string | null) {
   const user = requireUser(session);
   const baseWhere = schoolRegionWhere(user);
   const regionWhere =
-    user.role === "ADMIN" && regionFilter
+    canFilterByRegion(user.role) && regionFilter
       ? { regionId: regionFilter }
       : baseWhere;
 
@@ -314,7 +322,7 @@ export async function getWeeklyPlan(
 
   // Determine the effective regionId: RMs use their own region, Admins may filter
   const regionId: string | undefined =
-    user.role === "ADMIN" && regionFilter
+    canFilterByRegion(user.role) && regionFilter
       ? regionFilter
       : user.regionId ?? undefined;
 
@@ -763,6 +771,11 @@ async function computeLegMiles(
 export async function confirmVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
+  // Oversight roles read every region and change nobody's week: a CPO
+  // confirming or skipping a visit they did not make would land on somebody
+  // else's record and somebody else's mileage. Checked on the server, not just
+  // hidden in the nav — a hidden button is not a permission.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
 
   const parsed = confirmVisitSchema.safeParse(formData);
   if (!parsed.success) throw new Error(parsed.error.message);
@@ -871,6 +884,14 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
 }
 
 export async function skipVisit(schoolId: string, dateIso: string) {
+  const session = await auth();
+  const user = requireUser(session);
+  // Oversight roles read every region and change nobody's week: a CPO
+  // confirming or skipping a visit they did not make would land on somebody
+  // else's record and somebody else's mileage. Checked on the server, not just
+  // hidden in the nav — a hidden button is not a permission.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
+
   const date = new Date(dateIso);
   const plannedStart = new Date(
     Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 12, 0, 0)
@@ -895,7 +916,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
 
   // An ADMIN passing a regionFilter is inspecting that region, not reviewing their
   // own work, so the "my own visits" escape hatch below must not widen their filter.
-  const isAdminFilter = user.role === "ADMIN" && !!regionFilter;
+  const isAdminFilter = canFilterByRegion(user.role) && !!regionFilter;
   const effectiveRegionId = isAdminFilter
     ? regionFilter
     : baseWhere.regionId !== undefined
@@ -1009,6 +1030,11 @@ const manualVisitSchema = z.object({
 export async function addManualVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
+  // Oversight roles read every region and change nobody's week: a CPO
+  // confirming or skipping a visit they did not make would land on somebody
+  // else's record and somebody else's mileage. Checked on the server, not just
+  // hidden in the nav — a hidden button is not a permission.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
 
   const parsed = manualVisitSchema.safeParse(formData ?? {});
   if (!parsed.success) throw new Error(parsed.error.message);
@@ -1213,6 +1239,11 @@ export async function getMileageGaps(): Promise<MileageGap[]> {
 export async function retryMileageGaps(): Promise<{ fixed: number; remaining: number }> {
   const session = await auth();
   const user = requireUser(session);
+  // Oversight roles read every region and change nobody's week: a CPO
+  // confirming or skipping a visit they did not make would land on somebody
+  // else's record and somebody else's mileage. Checked on the server, not just
+  // hidden in the nav — a hidden button is not a permission.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
 
   const gaps = await prisma.visit.findMany({
     where: {
@@ -1336,6 +1367,11 @@ export async function getDayRoute(dateIso: string) {
 export async function reorderDayVisits(dateIso: string, orderedIds: string[]) {
   const session = await auth();
   const user = requireUser(session);
+  // Oversight roles read every region and change nobody's week: a CPO
+  // confirming or skipping a visit they did not make would land on somebody
+  // else's record and somebody else's mileage. Checked on the server, not just
+  // hidden in the nav — a hidden button is not a permission.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
   const { dayStart, dayEnd } = dayRangeFor(new Date(dateIso));
   const dayKey = dayKeyInAppZone(new Date(dateIso));
 
@@ -1513,7 +1549,7 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
 
   const existing = await prisma.visit.findUnique({ where: { id }, select: { visitedById: true, plannedStartDateTime: true } });
   if (!existing) throw new Error("Visit not found");
-  if (existing.visitedById && existing.visitedById !== user.id && user.role !== "ADMIN") {
+  if (existing.visitedById && existing.visitedById !== user.id && !canEditOthersVisits(user.role)) {
     throw new Error("That visit belongs to someone else");
   }
 
@@ -2043,6 +2079,12 @@ export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
 }
 
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {
+  const session = await auth();
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
+
   return await prisma.teacher.create({
     data: {
       school: { connect: { id: schoolId } },
@@ -2053,6 +2095,12 @@ export async function createTeacher(schoolId: string, data: { name: string; subj
 }
 
 export async function updateTeacher(teacherId: string, data: { name?: string; subjects?: string }) {
+  const session = await auth();
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
+
   return await prisma.teacher.update({
     where: { id: teacherId },
     data: {
@@ -2063,6 +2111,12 @@ export async function updateTeacher(teacherId: string, data: { name?: string; su
 }
 
 export async function deleteTeacher(teacherId: string) {
+  const session = await auth();
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
+
   return await prisma.teacher.delete({ where: { id: teacherId } });
 }
 
@@ -2083,7 +2137,10 @@ export async function getVisitRulesForSchool(schoolId: string) {
 
 export async function createVisitRule(schoolId: string, formData: unknown) {
   const session = await auth();
-  requireUser(session);
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
 
   const parsed = visitRuleSchema.safeParse(formData);
   if (!parsed.success) throw new Error(parsed.error.message);
@@ -2109,7 +2166,10 @@ export async function createVisitRule(schoolId: string, formData: unknown) {
 
 export async function archiveVisitRule(ruleId: string) {
   const session = await auth();
-  requireUser(session);
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
   return await prisma.visitRule.update({
     where: { id: ruleId },
     data: { effectiveTo: new Date() },
@@ -2118,7 +2178,10 @@ export async function archiveVisitRule(ruleId: string) {
 
 export async function updateVisitRule(ruleId: string, formData: unknown) {
   const session = await auth();
-  requireUser(session);
+  const user = requireUser(session);
+  if (!canManageSchoolData(user.role)) {
+    throw new Error("Forbidden: this role cannot edit school records");
+  }
 
   const parsed = visitRuleSchema.safeParse(formData);
   if (!parsed.success) throw new Error(parsed.error.message);
@@ -2270,7 +2333,7 @@ export async function getReportableUsers() {
   const session = await auth();
   const user = requireUser(session);
 
-  if (user.role !== "ADMIN" && user.role !== "REGIONAL_MANAGER") {
+  if (!canSeeOthersReports(user.role)) {
     const me = await prisma.user.findUnique({
       where: { id: user.id },
       select: { id: true, name: true, email: true },
@@ -2279,7 +2342,7 @@ export async function getReportableUsers() {
   }
 
   return await prisma.user.findMany({
-    where: user.role === "ADMIN" ? {} : { regionId: user.regionId ?? undefined },
+    where: seesAllRegions(user.role) ? {} : { regionId: user.regionId ?? undefined },
     select: { id: true, name: true, email: true },
     orderBy: [{ name: "asc" }, { email: "asc" }],
   });
@@ -2297,8 +2360,8 @@ export async function getMileageReport(params: {
   const session = await auth();
   const user = requireUser(session);
 
-  const regionId = user.role === "ADMIN" ? params.regionId ?? undefined : scopeToRegion(user);
-  const canSeeOthers = user.role === "ADMIN" || user.role === "REGIONAL_MANAGER";
+  const regionId = canFilterByRegion(user.role) ? params.regionId ?? undefined : scopeToRegion(user);
+  const canSeeOthers = canSeeOthersReports(user.role);
   const visitedById = canSeeOthers ? params.userId ?? undefined : user.id;
 
   const range = await resolveRange(prisma, params.preset, {

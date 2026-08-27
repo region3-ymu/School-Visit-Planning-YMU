@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { syncAllSchoolCalendars, getDefaultSyncRange } from "@/modules/calendarSync";
+import { canAdministerApp } from "@/lib/permissions";
 
 /**
  * Manual calendar sync trigger. ADMIN-only via session; also reachable with
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
 
   if (!isCron) {
     const session = await auth();
-    if (!session?.user || session.user.role !== "ADMIN") {
+    if (!session?.user || !canAdministerApp(session.user.role)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

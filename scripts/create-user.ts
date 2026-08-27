@@ -2,10 +2,15 @@
  * CLI: create a user account.
  *
  * Usage:
- *   npm run create-user -- --email=rm@ymu.org --name="Jane Doe" --role=REGIONAL_MANAGER --region=NORTH --password=secret
+ *   npm run create-user -- --email=rm@ymu.org --name="Jane Doe" --role=REGIONAL_MANAGER --region=NORTH
+ *   npm run create-user -- --email=cpo@ymu.org --name="Pedro Diaz" --role=CPO
  *   npm run create-user -- --email=mentor@partner.org --name="Bob" --role=MENTOR --password=secret
  *
- * For @ymu.org accounts, --password is optional (they'll sign in via Google OAuth).
+ * LEAVE --password OFF for an @ymu.org account. They sign in with "Continue
+ * with Google", which means no password exists to be shared over WhatsApp,
+ * reused elsewhere, or left behind when somebody leaves — Workspace already
+ * decides who they are, and src/auth.config.ts refuses anything that is not
+ * @ymu.org. --password is for the rare account outside the domain.
  */
 
 import { PrismaClient } from "@prisma/client";
@@ -13,8 +18,42 @@ import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
-type Role = "ADMIN" | "REGIONAL_MANAGER" | "AFTER_SCHOOL_MANAGER" | "MENTOR" | "INTERVENTIONIST";
-const VALID_ROLES: Role[] = ["ADMIN", "REGIONAL_MANAGER", "AFTER_SCHOOL_MANAGER", "MENTOR", "INTERVENTIONIST"];
+type Role =
+  | "ADMIN"
+  | "REGIONAL_MANAGER"
+  | "AFTER_SCHOOL_MANAGER"
+  | "CPO"
+  | "OPERATIONS_MANAGER"
+  | "ACADEMIC_MANAGER"
+  | "MENTOR"
+  | "INTERVENTIONIST";
+
+const VALID_ROLES: Role[] = [
+  "ADMIN",
+  "REGIONAL_MANAGER",
+  "AFTER_SCHOOL_MANAGER",
+  "CPO",
+  "OPERATIONS_MANAGER",
+  "ACADEMIC_MANAGER",
+  "MENTOR",
+  "INTERVENTIONIST",
+];
+
+/**
+ * Roles that must NOT carry a region.
+ *
+ * The Afterschool Manager runs programmes in every region and the oversight
+ * roles read all of them; pinning either to one region would silently hide four
+ * fifths of the app from them, and it is the kind of mistake that looks like
+ * missing data rather than a wrong flag.
+ */
+const REGIONLESS_ROLES: Role[] = [
+  "AFTER_SCHOOL_MANAGER",
+  "CPO",
+  "OPERATIONS_MANAGER",
+  "ACADEMIC_MANAGER",
+  "ADMIN",
+];
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
@@ -41,6 +80,25 @@ async function main() {
 
   if (!VALID_ROLES.includes(role)) {
     console.error(`Invalid role "${role}". Valid roles: ${VALID_ROLES.join(", ")}`);
+    process.exit(1);
+  }
+
+  if (region && REGIONLESS_ROLES.includes(role)) {
+    console.error(
+      `Role ${role} must not have a region — it covers all of them. Drop --region.`
+    );
+    process.exit(1);
+  }
+
+  if (!region && role === "REGIONAL_MANAGER") {
+    console.error("A REGIONAL_MANAGER needs --region (NORTH, SOUTH, EAST, WEST or CENTRAL).");
+    process.exit(1);
+  }
+
+  if (!password && !email.endsWith("@ymu.org")) {
+    console.error(
+      `${email} is outside @ymu.org, so Google sign-in will refuse it. Pass --password.`
+    );
     process.exit(1);
   }
 
@@ -71,6 +129,9 @@ async function main() {
   }
 
   console.log(`User created/updated: ${email} (${role})`);
+  if (!hashedPassword) {
+    console.log("  No password set — they sign in with Continue with Google.");
+  }
 }
 
 main()
