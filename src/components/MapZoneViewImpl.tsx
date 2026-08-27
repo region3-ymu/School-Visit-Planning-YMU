@@ -100,6 +100,16 @@ function googleMapsUrl(route: DayRouteResult): string {
   return url;
 }
 
+/**
+ * Departure options, quarter-hourly from 05:00 to 15:00. Wide enough for the
+ * earliest start anybody has taken and an afternoon-only day, short enough that
+ * the picker is one flick.
+ */
+const DEPARTURE_TIMES = Array.from({ length: 41 }, (_, i) => {
+  const minutes = 5 * 60 + i * 15;
+  return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+});
+
 export default function MapZoneViewImpl() {
   const [schools, setSchools] = useState<
     { id: string; name: string; zipCode: string; lat: number | null; lng: number | null }[]
@@ -117,6 +127,9 @@ export default function MapZoneViewImpl() {
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [departureTime, setDepartureTime] = useState("08:00");
+  // Class order by default. Shortest drive is still one tick away for a day of
+  // stops with nothing to catch — see classTimeOrder() in optimizeRoute.ts.
+  const [routeStrategy, setRouteStrategy] = useState<"class-time" | "shortest-drive">("class-time");
   const [route, setRoute] = useState<DayRouteResult | null>(null);
   const [manualOrder, setManualOrder] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -224,6 +237,19 @@ export default function MapZoneViewImpl() {
           throw new Error("No planned visits for this day");
         }
 
+        // The class each stop is aimed at. The plan knows this and the server
+        // does not — getOptimalRouteForDay is handed school ids, which say
+        // nothing about what time anybody teaches.
+        //
+        // A visit flagged noClassWarning is an admin drop-in with no class to
+        // be late for, so it is left untimed on purpose and the router is free
+        // to slot it wherever it costs least driving.
+        const classTimes: Record<string, string> = {};
+        for (const v of todaysVisits) {
+          const time = v.classStartTime ?? (v.noClassWarning ? undefined : v.startTime);
+          if (time && /^\d{2}:\d{2}$/.test(time)) classTimes[v.schoolId] = time;
+        }
+
         const start = await resolveStartLocation();
         const result = await getOptimalRouteForDay(
           selectedDate,
@@ -233,6 +259,8 @@ export default function MapZoneViewImpl() {
             departureTime,
             manualOrder: opts?.order ?? manualOrder ?? undefined,
             reoptimize: opts?.reoptimize,
+            classTimes,
+            strategy: routeStrategy,
           }
         );
 
@@ -248,7 +276,7 @@ export default function MapZoneViewImpl() {
         setLoading(false);
       }
     },
-    [todaysVisits, selectedDate, resolveStartLocation, departureTime, manualOrder]
+    [todaysVisits, selectedDate, resolveStartLocation, departureTime, manualOrder, routeStrategy]
   );
 
   const handleDrop = async (fromIndex: number, toIndex: number) => {
@@ -276,15 +304,23 @@ export default function MapZoneViewImpl() {
   const displayStops: RouteLeg[] = route?.stops ?? [];
 
   return (
-    // 100vh here was measured against the URL-bar-hidden viewport and then floored
-    // at 600px, so on a phone the panel below the map was pushed off the screen
-    // with no way to scroll to it. dvh plus a floor a phone can actually satisfy;
-    // the desktop figure is unchanged. The mobile top bar takes its own 3rem,
-    // which is why the two subtractions differ.
-    <div className="flex flex-col h-[calc(100dvh-11rem)] min-h-[420px] md:h-[calc(100dvh-8rem)] md:min-h-[600px] p-3 sm:p-4 gap-3 sm:gap-4">
-      <div className="flex flex-col lg:flex-row gap-4 flex-1 min-h-0">
+    // NO viewport arithmetic on a phone.
+    //
+    // This used to be h-[calc(100vh-8rem)] with a 600px floor, and then
+    // h-[calc(100dvh-11rem)] — both of which are guesses at how much chrome is
+    // above and below, and both of which were wrong on somebody's phone: too
+    // tall and the panel falls off the bottom, too short and there is dead
+    // space. The guess is the bug.
+    //
+    // Below lg nothing is pinned to the viewport at all: the map takes a share
+    // of the screen, the controls flow underneath it, and the page scrolls the
+    // way every other tab does. From lg up the side-by-side layout does need a
+    // definite height, and there it fills the scroll container it is given
+    // (page.tsx hands the map tab h-full) rather than measuring the window.
+    <div className="flex flex-col gap-3 p-3 sm:gap-4 sm:p-4 lg:h-full lg:min-h-0">
+      <div className="flex flex-col gap-3 sm:gap-4 lg:flex-row lg:flex-1 lg:min-h-0">
         {/* Map — 60% landscape */}
-        <div className="lg:w-[60%] flex-1 min-h-[240px] sm:min-h-[300px] bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm relative z-0">
+        <div className="h-[45dvh] min-h-[240px] lg:h-auto lg:w-[60%] lg:flex-1 lg:min-h-[300px] bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl overflow-hidden shadow-sm relative z-0">
           <MapContainer
             center={mapCenter}
             zoom={11}
@@ -395,7 +431,7 @@ export default function MapZoneViewImpl() {
         </div>
 
         {/* Side panel — 40% landscape */}
-        <div className="lg:w-[40%] flex flex-col gap-3 overflow-y-auto min-h-0">
+        <div className="flex flex-col gap-3 lg:w-[40%] lg:overflow-y-auto lg:min-h-0">
           <div className="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl p-4 shadow-sm">
             <div className="flex items-center gap-2 mb-3">
               <Route className="text-indigo-600" size={22} />
@@ -506,15 +542,68 @@ export default function MapZoneViewImpl() {
               </p>
             )}
 
-            <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
+            {/* A <select>, not <input type="time">.
+                The native time picker on a phone has no dependable confirm
+                button: on iOS the wheel applies as it moves and offers only
+                Clear, so the RM was left looking for an Accept that does not
+                exist and assumed nothing had been set. A select uses the
+                platform's own list picker, which has a Done/OK on both iOS and
+                Android, and there is no way to be unsure what was chosen.
+                Quarter-hours across a working day is every departure anyone has
+                ever wanted here. */}
+            <label
+              htmlFor="departure-time"
+              className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1"
+            >
               Departure time
             </label>
-            <input
-              type="time"
+            <select
+              id="departure-time"
               value={departureTime}
               onChange={(e) => setDepartureTime(e.target.value)}
               className="w-full min-h-[44px] px-3 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm mb-3"
-            />
+            >
+              {DEPARTURE_TIMES.map((time) => (
+                <option key={time} value={time}>
+                  {time}
+                </option>
+              ))}
+              {/* Whatever was already saved, if it is not on the quarter-hour —
+                  otherwise the select would silently show the wrong time. */}
+              {!DEPARTURE_TIMES.includes(departureTime) && (
+                <option value={departureTime}>{departureTime}</option>
+              )}
+            </select>
+
+            <p className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
+              Visit order
+            </p>
+            <div className="mb-3 flex flex-col gap-1.5">
+              {(
+                [
+                  ["class-time", "By class time", "Follows the classes; nearest only decides where admin stops fit"],
+                  ["shortest-drive", "Shortest drive", "Ignores class times entirely"],
+                ] as const
+              ).map(([value, label, hint]) => (
+                <label
+                  key={value}
+                  className="flex items-start gap-2 rounded-lg border border-gray-200 dark:border-zinc-700 px-3 py-2 cursor-pointer"
+                >
+                  <input
+                    type="radio"
+                    name="route-strategy"
+                    value={value}
+                    checked={routeStrategy === value}
+                    onChange={() => setRouteStrategy(value)}
+                    className="mt-1"
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-gray-700 dark:text-gray-200">{label}</span>
+                    <span className="block text-[11px] text-gray-500 dark:text-gray-400">{hint}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
 
             {/* Today's visits */}
             <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
@@ -618,6 +707,21 @@ export default function MapZoneViewImpl() {
                         Arrive {stop.arrivalTime} · +{formatDuration(stop.legDurationSec)} ·{" "}
                         {formatDistance(stop.legDistanceM)}
                       </p>
+                      {/* The class this stop is for, so the order can be read
+                          against the thing it is supposed to follow — and a
+                          plain warning when the driving does not make it. */}
+                      {stop.classTime && (
+                        <p
+                          className={`text-xs font-medium ${
+                            stop.arrivesLate
+                              ? "text-red-600 dark:text-red-400"
+                              : "text-emerald-700 dark:text-emerald-400"
+                          }`}
+                        >
+                          Class {stop.classTime}
+                          {stop.arrivesLate ? " — arrives after it starts" : ""}
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-col gap-1 shrink-0">
                       <button

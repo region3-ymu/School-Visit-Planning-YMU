@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "icons": "node scripts/generate-icons.mjs",
+    "check:order": "npx tsx scripts/check-visit-order.ts",
     "db:seed": "npx tsx prisma/seed.ts",
     "import-schools": "npx tsx scripts/import-schools.ts",
     "import:ymua": "npx tsx scripts/import-from-ymua.ts",

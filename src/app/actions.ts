@@ -16,6 +16,7 @@ import {
 import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClient";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
+import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
 import { haversineMeters } from "@/lib/geo";
 import {
   APP_TIME_ZONE,
@@ -82,11 +83,128 @@ export async function getDashboardStats(regionFilter?: string | null) {
     })
     .sort((a, b) => b.visitCount - a.visitCount);
 
+  // ─── Cadence: due, overdue, never seen ────────────────────────────────────
+  //
+  // These three were placeholders — dueThisWeek was literally
+  // Math.floor(totalSchools / 3), and the other two were hardcoded zeros. A
+  // made-up number on a dashboard is worse than an empty one: it gets believed,
+  // and it gets planned around.
+  //
+  // Computed here from the same helpers the weekly planner proposes from
+  // (src/lib/cadence.ts), so the dashboard and the planner cannot tell a
+  // Regional Manager two different stories about the same school.
+  const [visitRules, doneVisitsForCadence] = await Promise.all([
+    prisma.visitRule.findMany({
+      where: { school: schoolsOnly },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.visit.findMany({
+      where: { status: "DONE", school: schoolsOnly },
+      orderBy: { plannedStartDateTime: "desc" },
+      select: {
+        schoolId: true,
+        plannedStartDateTime: true,
+        mode: true,
+        school: { select: { regionId: true } },
+        visitedBy: { select: { regionId: true } },
+      },
+    }),
+  ]);
+
+  const activeRules = activeRulesBySchool(visitRules);
+  const { lastInPerson } = lastContactBySchool(doneVisitsForCadence);
+
+  // Miami's today and Miami's week, not the host's — a server in UTC is already
+  // tomorrow by 8pm here, which would move a school from "due Friday" to
+  // "overdue" a day early.
+  const todayKey = dayKeyInAppZone(new Date());
+  const today = zonedDayStart(todayKey);
+  const weekStart = zonedDayStart(mondayOfDayKey(todayKey));
+  const weekEnd = addDays(weekStart, 7);
+
+  let dueThisWeek = 0;
+  let overdue = 0;
+  let neverVisited = 0;
+
+  for (const school of schools) {
+    const status = cadenceStatus(
+      lastInPerson.get(school.id),
+      activeRules.get(school.id)?.frequencyType,
+      today
+    );
+    if (status.neverVisited) {
+      // Counted apart from overdue on purpose: "twelve schools nobody has ever
+      // walked into" and "one school is three days late" are different jobs.
+      neverVisited += 1;
+    } else if (status.isOverdue) {
+      overdue += 1;
+    } else if (status.dueDate && status.dueDate < weekEnd) {
+      // Falls due before this week is out, and is not late yet.
+      dueThisWeek += 1;
+    }
+  }
+
+  // ─── Cancellations reported from the field ────────────────────────────────
+  //
+  // Not calendar cancellations: this is what the RM said happened when they got
+  // there, recorded as the reason the classroom rubric came back blank. That is
+  // the only place in the app anybody writes "they cancelled the class on me",
+  // so it is the only honest source for this number.
+  const CANCELLATION_WINDOW_DAYS = 30;
+  const recentCancellations = await prisma.visit.count({
+    where: {
+      status: "DONE",
+      obsSkipReason: "CLASS_CANCELLED",
+      plannedStartDateTime: { gte: addDays(today, -CANCELLATION_WINDOW_DAYS) },
+      ...(user.role === "ADMIN" && regionFilter
+        ? { school: { regionId: regionFilter } }
+        : { visitedById: user.id }),
+    },
+  });
+
+  // ─── This week's own work ─────────────────────────────────────────────────
+  //
+  // Visits, not schools: going back to the same school twice in a week is two
+  // visits, and an RM counting up their week means the second one too. The
+  // office is excluded — it is a stop on a route, not a school anybody is
+  // covering. Split by mode because a phone call and a morning at the school
+  // are not the same thing, which is the whole reason mode exists.
+  // An Admin filtering to a region wants that region's work; everyone else
+  // means their own. Composed as one object rather than spread over a `school`
+  // key that is already set — that silently drops the isOffice filter.
+  const weekScope =
+    user.role === "ADMIN" && regionFilter
+      ? { school: { isOffice: false, regionId: regionFilter } }
+      : { school: { isOffice: false }, visitedById: user.id };
+
+  const weekVisits = await prisma.visit.groupBy({
+    by: ["mode"],
+    where: {
+      status: "DONE",
+      plannedStartDateTime: { gte: weekStart, lt: weekEnd },
+      ...weekScope,
+    },
+    _count: { _all: true },
+  });
+
+  const countFor = (mode: string) =>
+    weekVisits.find((w) => w.mode === mode)?._count._all ?? 0;
+
+  const thisWeek = {
+    inPerson: countFor("IN_PERSON"),
+    online: countFor("ONLINE"),
+    phone: countFor("PHONE"),
+    total: weekVisits.reduce((sum, w) => sum + w._count._all, 0),
+  };
+
   return {
     totalActiveSchools: totalSchools,
-    dueThisWeek: Math.floor(totalSchools / 3),
-    overdue: 0,
-    recentCancellations: 0,
+    dueThisWeek,
+    overdue,
+    neverVisited,
+    recentCancellations,
+    cancellationWindowDays: CANCELLATION_WINDOW_DAYS,
+    thisWeek,
     visitedSchoolsList,
   };
 }
@@ -2024,7 +2142,18 @@ export async function getOptimalRouteForDay(
   dateIso: string,
   schoolIds: string[],
   startLocation: StartLocationInput,
-  options?: { manualOrder?: string[]; departureTime?: string; reoptimize?: boolean }
+  options?: {
+    manualOrder?: string[];
+    departureTime?: string;
+    reoptimize?: boolean;
+    /**
+     * schoolId -> "HH:mm" of the class this stop is aimed at. Sent by the map
+     * from the week's plan, because the plan is what knows which class each
+     * visit was for; this function only has school ids.
+     */
+    classTimes?: Record<string, string>;
+    strategy?: "class-time" | "shortest-drive";
+  }
 ) {
   const session = await auth();
   const user = requireUser(session);
@@ -2086,6 +2215,7 @@ export async function getOptimalRouteForDay(
     schoolName: s.name,
     lat: s.lat!,
     lng: s.lng!,
+    classTime: options?.classTimes?.[s.id],
   }));
 
   const departureTime = options?.departureTime ?? "08:00";
@@ -2104,7 +2234,13 @@ export async function getOptimalRouteForDay(
     });
     route = await computeRouteForOrder(prisma, start, orderedStops, departureTime);
   } else {
-    route = await optimizeRoute(prisma, start, stopInputs, departureTime);
+    route = await optimizeRoute(
+      prisma,
+      start,
+      stopInputs,
+      departureTime,
+      options?.strategy ?? "class-time"
+    );
   }
 
   const waypoints = [

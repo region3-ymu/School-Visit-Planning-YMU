@@ -7,7 +7,7 @@ import {
     getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getSchoolTeachers,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
-import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronRight, Route } from "lucide-react";
+import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronLeft, ChevronRight, Route } from "lucide-react";
 import VisitDetails from "./visit/VisitDetails";
 import DayRouteModal from "./visit/DayRouteModal";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
@@ -19,6 +19,7 @@ import TeacherObservationFields, {
     type ObservationSkipReason,
     type ObservationState,
 } from "./visit/TeacherObservationFields";
+import { addDaysToDayKey, dayKeyInAppZone, mondayOfDayKey, zonedDayStart } from "@/lib/timezone";
 
 const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
     { value: "PRINCIPAL", label: "Principal" },
@@ -34,12 +35,69 @@ const TALK_ABOUT_TRIGGERS = ["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER
 type VisitLogRow = Awaited<ReturnType<typeof getVisitHistory>>[number];
 type SchoolOption = Awaited<ReturnType<typeof getSchools>>[number];
 
+type Granularity = "day" | "week" | "month" | "all";
+
+function monthBounds(key: string): { start: string; end: string } {
+  const [y, m] = key.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return { start: `${y}-${pad(m)}-01`, end: `${y}-${pad(m)}-${pad(lastDay)}` };
+}
+
+/** The inclusive day-key window a granularity + anchor selects; null for "all". */
+function periodWindow(granularity: Granularity, anchorKey: string): { start: string; end: string } | null {
+  switch (granularity) {
+    case "all":
+      return null;
+    case "day":
+      return { start: anchorKey, end: anchorKey };
+    case "week": {
+      const monday = mondayOfDayKey(anchorKey);
+      return { start: monday, end: addDaysToDayKey(monday, 6) };
+    }
+    case "month":
+      return monthBounds(anchorKey);
+  }
+}
+
+function shiftAnchor(granularity: Granularity, anchorKey: string, direction: 1 | -1): string {
+  if (granularity === "day") return addDaysToDayKey(anchorKey, direction);
+  if (granularity === "week") return addDaysToDayKey(anchorKey, 7 * direction);
+  if (granularity === "month") {
+    const [y, m] = anchorKey.split("-").map(Number);
+    const total = y * 12 + (m - 1) + direction;
+    const ny = Math.floor(total / 12);
+    const nm = (total % 12) + 1;
+    // Clamped to the target month's length: stepping from the 31st must not
+    // skip February.
+    const lastDay = new Date(Date.UTC(ny, nm, 0)).getUTCDate();
+    const day = Math.min(Number(anchorKey.split("-")[2]), lastDay);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${ny}-${pad(nm)}-${pad(day)}`;
+  }
+  return anchorKey;
+}
+
+function periodLabel(granularity: Granularity, anchorKey: string): string {
+  // zonedDayStart turns the key back into the right instant for formatting, so
+  // the label can never name a different day than the filter uses.
+  const at = zonedDayStart(anchorKey);
+  if (granularity === "day") return format(at, "EEE d MMM");
+  if (granularity === "week") return `Week of ${format(zonedDayStart(mondayOfDayKey(anchorKey)), "d MMM")}`;
+  if (granularity === "month") return format(at, "MMMM yyyy");
+  return "All time";
+}
+
 export default function VisitHistory({ regionFilter }: { regionFilter?: string | null }) {
     const [history, setHistory] = useState<VisitLogRow[]>([]);
     const [schools, setSchools] = useState<SchoolOption[]>([]);
     const [otherSchools, setOtherSchools] = useState<{ id: string; name: string; regionName: string }[]>([]);
     const [loading, setLoading] = useState(true);
-    const [filterMonth, setFilterMonth] = useState<string>(new Date().getMonth().toString());
+    // Day / week / month / all, anchored on a date you can step through — the
+    // same shape as the Weekly Planner's week navigation, which is the one
+    // people here already know.
+    const [granularity, setGranularity] = useState<Granularity>("month");
+    const [anchorKey, setAnchorKey] = useState<string>(() => dayKeyInAppZone(new Date()));
 
     const [quarters, setQuarters] = useState<{ id: string; schoolYear: string; label: string }[]>([]);
     const [selectedQuarterKey, setSelectedQuarterKey] = useState<string>("");
@@ -380,16 +438,20 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         await fetchHistory();
     };
 
-    const filteredHistory = history.filter(log => {
-        if (filterMonth === "all") return true;
-        const logMonth = new Date(log.date).getMonth().toString();
-        return logMonth === filterMonth;
-    });
-
-    const months = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    ];
+    // Compared as Miami day keys ("yyyy-MM-dd"), which sort lexicographically.
+    //
+    // The old filter did `new Date(log.date).getMonth()` against a month index,
+    // which had two faults it never got credit for: it ignored the year, so
+    // August 2025 and August 2026 were the same "August", and it read the month
+    // in the browser's zone, so a visit logged after 8pm Miami on the last of
+    // the month was filed under the next one.
+    const window = periodWindow(granularity, anchorKey);
+    const filteredHistory = window
+        ? history.filter((log) => {
+              const key = dayKeyInAppZone(new Date(log.date));
+              return key >= window.start && key <= window.end;
+          })
+        : history;
 
     return (
         <div className="p-4 sm:p-6">
@@ -404,15 +466,46 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
                 <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
                     <select
-                        value={filterMonth}
-                        onChange={(e) => setFilterMonth(e.target.value)}
+                        value={granularity}
+                        onChange={(e) => setGranularity(e.target.value as Granularity)}
+                        aria-label="Filter visits by period"
                         className="bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-indigo-500"
                     >
-                        <option value="all">All Time</option>
-                        {months.map((m, i) => (
-                            <option key={i} value={i.toString()}>{m}</option>
-                        ))}
+                        <option value="day">Day</option>
+                        <option value="week">Week</option>
+                        <option value="month">Month</option>
+                        <option value="all">All time</option>
                     </select>
+
+                    {granularity !== "all" && (
+                        <div className="flex items-center rounded-lg border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden">
+                            <button
+                                type="button"
+                                onClick={() => setAnchorKey(shiftAnchor(granularity, anchorKey, -1))}
+                                aria-label="Previous period"
+                                className="min-h-[44px] px-2 hover:bg-gray-100 dark:hover:bg-zinc-800"
+                            >
+                                <ChevronLeft size={16} className="text-gray-600 dark:text-gray-300" />
+                            </button>
+                            <span className="px-2 text-sm font-semibold text-gray-700 dark:text-gray-200 whitespace-nowrap">
+                                {periodLabel(granularity, anchorKey)}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => setAnchorKey(shiftAnchor(granularity, anchorKey, 1))}
+                                aria-label="Next period"
+                                className="min-h-[44px] px-2 hover:bg-gray-100 dark:hover:bg-zinc-800"
+                            >
+                                <ChevronRight size={16} className="text-gray-600 dark:text-gray-300" />
+                            </button>
+                        </div>
+                    )}
+
+                    {/* Says how many visits the window actually holds. Without it
+                        an empty week and a broken filter look identical. */}
+                    <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                        {filteredHistory.length} visit{filteredHistory.length === 1 ? "" : "s"}
+                    </span>
 
                     {quarters.length > 0 && (
                         <>

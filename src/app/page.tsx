@@ -193,7 +193,7 @@ function HomeInner() {
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto w-full relative pb-[env(safe-area-inset-bottom)]">
-          <div className={activeTab === "map" ? "w-full min-h-full" : "max-w-7xl mx-auto w-full min-h-full"}>
+          <div className={activeTab === "map" ? "w-full min-h-full lg:h-full" : "max-w-7xl mx-auto w-full min-h-full"}>
           {/* Above every tab, not tucked inside the reports one: miles go
               missing at confirm time, and the RM who needs to know is the one
               planning their week, not the one already opening a report. */}

@@ -49,6 +49,7 @@ import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { haversineMeters } from "@/lib/geo";
 import type { ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
 import { getDefaultWorkWindow, getFrequencyDays } from "./types";
+import { activeRulesBySchool, lastContactBySchool } from "@/lib/cadence";
 
 // TODO Phase 3: make configurable per RM in settings
 const DEFAULT_MAX_VISITS_PER_DAY = 4;
@@ -196,31 +197,14 @@ export async function proposeVisitsForWeek(
 
   if (schools.length === 0) return [];
 
-  // The cadence is about being there, so it tracks in-person visits only.
-  // Remote contact is kept separately: it doesn't excuse a school from being
-  // visited, but it is worth saying on the card that somebody has been in touch.
-  const lastVisitBySchool = new Map<string, Date>();
-  const lastRemoteBySchool = new Map<string, Date>();
-  for (const v of doneVisits) {
-    // Counts toward this school's cadence only if the visitor covers it. An
-    // unattributed visit, or one by someone with no region, is counted rather
-    // than discarded — it happened, and there is nothing to say it wasn't theirs.
-    const visitorRegion = v.visitedBy?.regionId ?? null;
-    const coversThisSchool = visitorRegion == null || visitorRegion === v.school.regionId;
-    if (!coversThisSchool) continue;
+  // The cadence is about being there, so it tracks in-person visits only, and
+  // only those made by whoever covers the school. Both rules live in
+  // src/lib/cadence.ts because the dashboard has to answer "due this week" with
+  // exactly the same arithmetic this function plans from.
+  const { lastInPerson: lastVisitBySchool, lastRemote: lastRemoteBySchool } =
+    lastContactBySchool(doneVisits);
 
-    const target = v.mode === "IN_PERSON" ? lastVisitBySchool : lastRemoteBySchool;
-    if (!target.has(v.schoolId)) target.set(v.schoolId, v.plannedStartDateTime);
-  }
-
-  // Active VisitRule per school (latest rule where effectiveTo is null = still active)
-  const activeRuleBySchool = new Map<string, typeof visitRules[number]>();
-  for (const rule of visitRules) {
-    if (activeRuleBySchool.has(rule.schoolId)) continue; // already have latest
-    if (rule.effectiveTo === null || rule.effectiveTo === undefined) {
-      activeRuleBySchool.set(rule.schoolId, rule);
-    }
-  }
+  const activeRuleBySchool = activeRulesBySchool(visitRules);
 
   // Class sessions indexed by schoolId+dayStr for O(1) lookup
   const sessionsBySchoolDay = new Map<string, typeof classSessionsInWeek[number][]>();
