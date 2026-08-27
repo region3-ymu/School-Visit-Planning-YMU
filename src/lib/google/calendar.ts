@@ -69,7 +69,7 @@ export class GoogleCalendarError extends Error {
   }
 }
 
-type AccessToken = { value: string; expiresAt: number; scope: string };
+type AccessToken = { value: string; expiresAt: number; key: string };
 
 // calendar.readonly covers reading events/calendars/calendarList, but
 // calendarList.insert (subscribeToCalendar) is a write against the
@@ -233,9 +233,15 @@ export async function getGoogleAccessToken(
 ): Promise<string> {
   // Reuse a token until it is within five minutes of expiry. Keyed by scope so
   // a token minted for one scope is never handed to a call needing another.
+  // Keyed by account AND scope. Scope alone was enough while there was one
+  // service account; SVP now has two — svp-sync writes the export spreadsheet,
+  // and a different account reads the school calendars — and a cache that
+  // cannot tell them apart would eventually hand one account's token to a call
+  // made on behalf of the other.
+  const cacheKey = `${serviceAccount.client_email}|${scope}`;
   if (
     cachedAccessToken &&
-    cachedAccessToken.scope === scope &&
+    cachedAccessToken.key === cacheKey &&
     cachedAccessToken.expiresAt > Date.now() + 5 * 60_000
   ) {
     return cachedAccessToken.value;
@@ -269,7 +275,7 @@ export async function getGoogleAccessToken(
   cachedAccessToken = {
     value: token.access_token,
     expiresAt: Date.now() + (token.expires_in ?? 3600) * 1000,
-    scope,
+    key: cacheKey,
   };
   return cachedAccessToken.value;
 }
