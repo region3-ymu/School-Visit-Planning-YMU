@@ -54,6 +54,15 @@ model User {
   image          String?
   hashedPassword String?
   role           Role      @default(MENTOR)
+  /// Administers the app — calendar sync, accounts, correcting somebody else's
+  /// record — independently of the job title in `role`.
+  ///
+  /// Separate because the two are genuinely different facts and YMU has a
+  /// person who is both: Pedro Diaz is the CPO, and the app should say CPO,
+  /// but he also administers it. Folding that into the role would either
+  /// mislabel him ADMIN on every report or leave the CPO unable to fix a visit
+  /// logged against the wrong school. There can be any number of them.
+  isAppAdmin     Boolean   @default(false)
   regionId       String?
   // Saved "start from home" location for route/mileage calculations —
   // only used when explicitly selected, never assumed automatically.

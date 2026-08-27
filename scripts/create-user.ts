@@ -3,7 +3,7 @@
  *
  * Usage:
  *   npm run create-user -- --email=rm@ymu.org --name="Jane Doe" --role=REGIONAL_MANAGER --region=NORTH
- *   npm run create-user -- --email=cpo@ymu.org --name="Pedro Diaz" --role=CPO
+ *   npm run create-user -- --email=cpo@ymu.org --name="Pedro Diaz" --role=CPO --admin
  *   npm run create-user -- --email=mentor@partner.org --name="Bob" --role=MENTOR --password=secret
  *
  * LEAVE --password OFF for an @ymu.org account. They sign in with "Continue
@@ -67,11 +67,14 @@ function parseArgs(argv: string[]) {
     role: get("role")?.toUpperCase() as Role | null,
     region: get("region")?.toUpperCase() ?? null,
     password: get("password"),
+    // Administering the app is a flag on the person, not a job title: YMU's CPO
+    // administers it and the app still has to call him the CPO.
+    admin: args.includes("--admin"),
   };
 }
 
 async function main() {
-  const { email, name, role, region, password } = parseArgs(process.argv);
+  const { email, name, role, region, password, admin } = parseArgs(process.argv);
 
   if (!email || !role) {
     console.error("Usage: npm run create-user -- --email=EMAIL --role=ROLE [--name=NAME] [--region=CODE] [--password=PASS]");
@@ -116,8 +119,16 @@ async function main() {
 
   const user = await prisma.user.upsert({
     where: { email },
-    update: { name, role, regionId, ...(hashedPassword ? { hashedPassword } : {}) },
-    create: { email, name, role, regionId, hashedPassword },
+    update: {
+      name,
+      role,
+      regionId,
+      // Only ever raised here, never lowered by omission: forgetting --admin on
+      // a later edit must not quietly strip somebody's access.
+      ...(admin ? { isAppAdmin: true } : {}),
+      ...(hashedPassword ? { hashedPassword } : {}),
+    },
+    create: { email, name, role, regionId, isAppAdmin: admin, hashedPassword },
   });
 
   if (role === "REGIONAL_MANAGER" && regionId) {
@@ -129,6 +140,7 @@ async function main() {
   }
 
   console.log(`User created/updated: ${email} (${role})`);
+  if (admin) console.log("  Also an app administrator.");
 
   // Reported from the row, not from the argument. An upsert without --password
   // leaves an existing hash alone, so saying "no password set" here was a lie

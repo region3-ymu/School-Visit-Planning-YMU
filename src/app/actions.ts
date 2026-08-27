@@ -17,6 +17,7 @@ import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClien
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
+import { isAfterschoolClass, isAfterschoolTitle, minutesFromTimeString } from "@/lib/afterschool";
 import {
   canEditOthersVisits,
   canFilterByRegion,
@@ -494,12 +495,11 @@ export async function getSchoolOptionsForWeek(
     where: { schoolId, startDateTime: { gte: start }, endDateTime: { lt: weekEnd } },
     include: { subject: true },
   });
-  const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
   // Whose programme this viewer runs. Same rule as the planner: an RM never
   // wants the afterschool slots, and the Afterschool Manager wants nothing else.
   const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
   for (const s of sessions) {
-    if (isAfterschool(s.subject?.name ?? "") !== wantAfterschool) continue;
+    if (isAfterschoolClass(s.subject?.name, s.startDateTime) !== wantAfterschool) continue;
     addOption({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {
@@ -517,7 +517,9 @@ export async function getSchoolOptionsForWeek(
   for (const d of weekDates) {
     const weekdayName = format(d, "EEEE");
     for (const r of rules) {
-      if (/afterschool/i.test(r?.class ?? "")) continue;
+      // The school's own availability windows, which carry a "HH:mm" and no
+      // date — same classification rule, reached through the string form.
+      if (isAfterschoolTitle(r?.class, minutesFromTimeString(r?.start)) !== wantAfterschool) continue;
       if (r.weekday && r.weekday !== weekdayName) continue;
       if (!r.weekday) continue;
       addOption({ date: format(d, "yyyy-MM-dd"), rule: r });
@@ -546,10 +548,9 @@ export async function getSchoolCalendarOptionsForWeek(
     orderBy: { startDateTime: "asc" },
   });
 
-  const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
   const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
   return sessions
-    .filter((s) => isAfterschool(s.subject?.name ?? "") === wantAfterschool)
+    .filter((s) => isAfterschoolClass(s.subject?.name, s.startDateTime) === wantAfterschool)
     .map((s) => ({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {
@@ -1569,7 +1570,7 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
 
   const existing = await prisma.visit.findUnique({ where: { id }, select: { visitedById: true, plannedStartDateTime: true } });
   if (!existing) throw new Error("Visit not found");
-  if (existing.visitedById && existing.visitedById !== user.id && !canEditOthersVisits(user.role)) {
+  if (existing.visitedById && existing.visitedById !== user.id && !canEditOthersVisits(user)) {
     throw new Error("That visit belongs to someone else");
   }
 
@@ -2101,7 +2102,7 @@ export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
 
@@ -2117,7 +2118,7 @@ export async function createTeacher(schoolId: string, data: { name: string; subj
 export async function updateTeacher(teacherId: string, data: { name?: string; subjects?: string }) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
 
@@ -2133,7 +2134,7 @@ export async function updateTeacher(teacherId: string, data: { name?: string; su
 export async function deleteTeacher(teacherId: string) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
 
@@ -2158,7 +2159,7 @@ export async function getVisitRulesForSchool(schoolId: string) {
 export async function createVisitRule(schoolId: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
 
@@ -2187,7 +2188,7 @@ export async function createVisitRule(schoolId: string, formData: unknown) {
 export async function archiveVisitRule(ruleId: string) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
   return await prisma.visitRule.update({
@@ -2199,7 +2200,7 @@ export async function archiveVisitRule(ruleId: string) {
 export async function updateVisitRule(ruleId: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
-  if (!canManageSchoolData(user.role)) {
+  if (!canManageSchoolData(user)) {
     throw new Error("Forbidden: this role cannot edit school records");
   }
 

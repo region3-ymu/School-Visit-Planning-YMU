@@ -60,33 +60,40 @@ export function canPlanVisits(role: Role): boolean {
 }
 
 /**
+ * The parts of a user these checks need. Taking an object rather than a bare
+ * role because administering the app is a flag on the person, not a job title —
+ * YMU's CPO administers it and the app still has to call him the CPO.
+ */
+export type Principal = { role: Role; isAppAdmin?: boolean | null };
+
+/** Administers the app: calendar sync, accounts, correcting other people's records. */
+export function canAdministerApp(user: Principal): boolean {
+  return Boolean(user.isAppAdmin) || user.role === "ADMIN";
+}
+
+/**
  * Edits school-level records: teachers and visit rules.
  *
- * ADMIN is included because keeping the roster right is administration, not
- * planning. The other oversight roles are not.
+ * An app administrator is included because keeping the roster right is
+ * administration, not planning. The other oversight roles are not.
  */
-export function canManageSchoolData(role: Role): boolean {
-  return canPlanVisits(role) || role === "ADMIN";
+export function canManageSchoolData(user: Principal): boolean {
+  return canPlanVisits(user.role) || canAdministerApp(user);
 }
 
 /**
  * Corrects or deletes a visit somebody else recorded.
  *
- * ADMIN only, and it is not the same permission as planning: fixing a visit
- * logged against the wrong school is the job, whereas creating one is not.
+ * Administrators only, and it is not the same permission as planning: fixing a
+ * visit logged against the wrong school is the job, creating one is not.
  */
-export function canEditOthersVisits(role: Role): boolean {
-  return role === "ADMIN";
+export function canEditOthersVisits(user: Principal): boolean {
+  return canAdministerApp(user);
 }
 
 /** Sees other people's mileage, not only their own. */
 export function canSeeOthersReports(role: Role): boolean {
   return seesAllRegions(role) || role === "REGIONAL_MANAGER";
-}
-
-/** Runs the calendar sync and other app plumbing. */
-export function canAdministerApp(role: Role): boolean {
-  return role === "ADMIN";
 }
 
 /**
@@ -112,7 +119,13 @@ export function programmeScopeFor(role: Role): "exclude-afterschool" | "only-aft
  * for was out of hours by definition, which is what "afterschool" means.
  */
 export function workWindowFor(role: Role): { start: string; end: string } | undefined {
-  if (role === "AFTER_SCHOOL_MANAGER") return { start: "08:00", end: "19:00" };
+  // 19:30, from the data rather than a guess: across YMU-A's 3,908 afterschool
+  // events the latest any class ends is 18:30 (Little River), and the planner
+  // only proposes a class that fits ENTIRELY inside the window — so an end of
+  // 17:00 or even 18:00 silently drops the longest programmes. The margin
+  // costs nothing: widening this role's day cannot pull a school-hours class
+  // into their plan, because the programme filter already decided that.
+  if (role === "AFTER_SCHOOL_MANAGER") return { start: "08:00", end: "19:30" };
   return undefined;
 }
 

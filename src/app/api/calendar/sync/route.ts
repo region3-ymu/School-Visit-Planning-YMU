@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
 
   if (!isCron) {
     const session = await auth();
-    if (!session?.user || !canAdministerApp(session.user.role)) {
+    if (!session?.user || !canAdministerApp(session.user)) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
   }

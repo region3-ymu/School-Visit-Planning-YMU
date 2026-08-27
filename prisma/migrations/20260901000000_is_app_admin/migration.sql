@@ -1,0 +1,11 @@
+-- Who administers the app, as its own fact.
+--
+-- `role` is a job title and there is one per person. Administering the app is
+-- not a job title — YMU's CPO does it, and so does a Regional Manager wearing a
+-- second hat — so expressing it through the role forced a choice between
+-- labelling Pedro Diaz ADMIN on every report he appears on, or leaving the CPO
+-- unable to correct a visit filed against the wrong school.
+--
+-- Defaults to false, so nothing gains a permission by being migrated. The
+-- accounts that need it are set explicitly right after.
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "isAppAdmin" BOOLEAN NOT NULL DEFAULT false;

@@ -6,7 +6,7 @@ import { canAdministerApp } from "@/lib/permissions";
 /** Review queue: Google calendars pulled during sync with no matching active School. */
 export async function GET() {
   const session = await auth();
-  if (!session?.user || !canAdministerApp(session.user.role)) {
+  if (!session?.user || !canAdministerApp(session.user)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

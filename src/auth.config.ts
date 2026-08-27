@@ -61,6 +61,7 @@ export default {
     async session({ session, token }) {
       session.user.id = token.sub!;
       session.user.role = token.role as import("@prisma/client").Role;
+      session.user.isAppAdmin = Boolean(token.isAppAdmin);
       session.user.regionId = (token.regionId as string | null) ?? null;
       session.user.regionName = (token.regionName as string | null) ?? null;
       return session;

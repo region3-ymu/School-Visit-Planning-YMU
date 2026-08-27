@@ -9,7 +9,7 @@
  */
 import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
-import { ROLE_LABELS, canPlanVisits, seesAllRegions, tabsForRole } from "../src/lib/permissions";
+import { ROLE_LABELS, canAdministerApp, canPlanVisits, seesAllRegions, tabsForRole } from "../src/lib/permissions";
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -20,6 +20,7 @@ async function main() {
       email: true,
       name: true,
       role: true,
+      isAppAdmin: true,
       hashedPassword: true,
       region: { select: { code: true } },
       managedRegion: { select: { code: true } },
@@ -36,7 +37,12 @@ async function main() {
       u.hashedPassword ? "password" : null,
     ].filter(Boolean);
     console.log(`${u.email}`);
-    console.log(`  ${u.name ?? "(no name)"} — ${ROLE_LABELS[u.role]}`);
+    console.log(
+      `  ${u.name ?? "(no name)"} — ${ROLE_LABELS[u.role]}` +
+        // Not repeated for the ADMIN role, where it would read "App
+        // Administrator + app administrator".
+        (u.isAppAdmin && u.role !== "ADMIN" ? " + app administrator" : "")
+    );
     console.log(
       `  region: ${u.region?.code ?? (seesAllRegions(u.role) ? "all regions" : "none")}` +
         (u.managedRegion ? ` · manages ${u.managedRegion.code}` : "")
@@ -44,6 +50,7 @@ async function main() {
     console.log(`  sign in: ${signIn.length ? signIn.join(" or ") : "Google (not yet linked)"}`);
     console.log(`  tabs: ${tabsForRole(u.role).join(", ")}`);
     console.log(`  can plan/record visits: ${canPlanVisits(u.role) ? "yes" : "no (read-only)"}`);
+    console.log(`  can administer the app: ${canAdministerApp(u) ? "yes" : "no"}`);
     console.log(`  visits recorded: ${u._count.visits}`);
     console.log();
   }

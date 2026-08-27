@@ -50,6 +50,7 @@ import { haversineMeters } from "@/lib/geo";
 import type { ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
 import { getDefaultWorkWindow, getFrequencyDays } from "./types";
 import { activeRulesBySchool, lastContactBySchool } from "@/lib/cadence";
+import { isAfterschoolClass } from "@/lib/afterschool";
 
 // TODO Phase 3: make configurable per RM in settings
 const DEFAULT_MAX_VISITS_PER_DAY = 4;
@@ -124,7 +125,6 @@ function timeToMins(time: string): number {
   return h * 60 + (m ?? 0);
 }
 
-const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
 
 export async function proposeVisitsForWeek(
   prisma: PrismaClient,
@@ -163,12 +163,20 @@ export async function proposeVisitsForWeek(
   // next week does not vanish from the cadence today.
   let afterschoolSchoolIds: string[] | null = null;
   if (onlyAfterschool) {
+    // Classified in code, not with a SQL LIKE on "afterschool": the titles are
+    // "After School ...", "Tutoring", "Fusion Ensemble", and a LIKE would have
+    // reproduced exactly the blind spot this replaced. The weak tier needs the
+    // start time, which is why the rows come back with it.
     const rows = await prisma.classSession.findMany({
-      where: { subject: { name: { contains: "afterschool", mode: "insensitive" } } },
-      select: { schoolId: true },
-      distinct: ["schoolId"],
+      select: { schoolId: true, startDateTime: true, subject: { select: { name: true } } },
     });
-    afterschoolSchoolIds = rows.map((r) => r.schoolId);
+    afterschoolSchoolIds = [
+      ...new Set(
+        rows
+          .filter((r) => isAfterschoolClass(r.subject?.name, r.startDateTime))
+          .map((r) => r.schoolId)
+      ),
+    ];
   }
 
   const scopedSchoolWhere = afterschoolSchoolIds
@@ -229,8 +237,10 @@ export async function proposeVisitsForWeek(
   // Class sessions indexed by schoolId+dayStr for O(1) lookup
   const sessionsBySchoolDay = new Map<string, typeof classSessionsInWeek[number][]>();
   for (const s of classSessionsInWeek) {
-    // The one line that decides whose plan this is.
-    if (isAfterschool(s.subject?.name ?? "") !== onlyAfterschool) continue;
+    // The one line that decides whose plan this is. The classifier needs the
+    // start time as well as the title: "Marching Band" is afterschool at Carol
+    // City at 15:00 and a regular class at Homestead at 07:40.
+    if (isAfterschoolClass(s.subject?.name, s.startDateTime) !== onlyAfterschool) continue;
     const key = `${s.schoolId}:${dayKeyInAppZone(s.startDateTime)}`;
     if (!sessionsBySchoolDay.has(key)) sessionsBySchoolDay.set(key, []);
     sessionsBySchoolDay.get(key)!.push(s);

@@ -53,10 +53,16 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       if (user) {
         const dbUser = await prisma.user.findUnique({
           where: { id: user.id! },
-          select: { role: true, regionId: true, region: { select: { name: true } } },
+          select: {
+            role: true,
+            isAppAdmin: true,
+            regionId: true,
+            region: { select: { name: true } },
+          },
         });
         if (dbUser) {
           token.role = dbUser.role;
+          token.isAppAdmin = dbUser.isAppAdmin;
           token.regionId = dbUser.regionId ?? null;
           token.regionName = dbUser.region?.name ?? null;
         }
