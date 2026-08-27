@@ -129,9 +129,19 @@ async function main() {
   }
 
   console.log(`User created/updated: ${email} (${role})`);
-  if (!hashedPassword) {
-    console.log("  No password set — they sign in with Continue with Google.");
-  }
+
+  // Reported from the row, not from the argument. An upsert without --password
+  // leaves an existing hash alone, so saying "no password set" here was a lie
+  // for any account that already had one.
+  const saved = await prisma.user.findUnique({
+    where: { email },
+    select: { hashedPassword: true },
+  });
+  console.log(
+    saved?.hashedPassword
+      ? "  Signs in with Continue with Google, or with their existing password."
+      : "  No password on this account — they sign in with Continue with Google."
+  );
 }
 
 main()

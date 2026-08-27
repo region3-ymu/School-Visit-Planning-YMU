@@ -23,7 +23,9 @@ import {
   canManageSchoolData,
   canPlanVisits,
   canSeeOthersReports,
+  programmeScopeFor,
   seesAllRegions,
+  workWindowFor,
 } from "@/lib/permissions";
 import { haversineMeters } from "@/lib/geo";
 import {
@@ -336,6 +338,14 @@ export async function getWeeklyPlan(
 
   const proposed = await proposeVisitsForWeek(prisma, weekStart, {
     regionId,
+    // The Afterschool Manager plans afterschool across every region; everyone
+    // else plans the school day. Before this the filter was hardcoded to
+    // exclude afterschool, so that role's planner would have been empty — the
+    // 23 sessions it exists to cover were the only ones being dropped.
+    programmes: programmeScopeFor(user.role),
+    // An afterschool class is out of hours by definition, so it needs a working
+    // day that reaches past 17:00 — see workWindowFor().
+    workWindow: workWindowFor(user.role),
     maxVisitsPerWeek,
     maxVisitsPerDay,
     distanceService,
@@ -457,6 +467,9 @@ export async function getSchoolOptionsForWeek(
   schoolId: string,
   weekStartDateIso: string
 ): Promise<import("@/lib/types").ViableOption[]> {
+  const session = await auth();
+  const user = requireUser(session);
+
   // Same Miami-anchored week as getWeeklyPlan, so the two can't disagree about
   // which days the week covers.
   const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
@@ -482,8 +495,11 @@ export async function getSchoolOptionsForWeek(
     include: { subject: true },
   });
   const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
+  // Whose programme this viewer runs. Same rule as the planner: an RM never
+  // wants the afterschool slots, and the Afterschool Manager wants nothing else.
+  const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
   for (const s of sessions) {
-    if (isAfterschool(s.subject?.name ?? "")) continue;
+    if (isAfterschool(s.subject?.name ?? "") !== wantAfterschool) continue;
     addOption({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {
@@ -515,6 +531,9 @@ export async function getSchoolCalendarOptionsForWeek(
   schoolId: string,
   weekStartDateIso: string
 ): Promise<import("@/lib/types").ViableOption[]> {
+  const session = await auth();
+  const user = requireUser(session);
+
   // Same Miami-anchored week as getWeeklyPlan, so the two can't disagree about
   // which days the week covers.
   const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
@@ -528,8 +547,9 @@ export async function getSchoolCalendarOptionsForWeek(
   });
 
   const isAfterschool = (name: string) => /afterschool/i.test(name ?? "");
+  const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
   return sessions
-    .filter((s) => !isAfterschool(s.subject?.name ?? ""))
+    .filter((s) => isAfterschool(s.subject?.name ?? "") === wantAfterschool)
     .map((s) => ({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {

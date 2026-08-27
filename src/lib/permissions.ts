@@ -89,6 +89,33 @@ export function canAdministerApp(role: Role): boolean {
   return role === "ADMIN";
 }
 
+/**
+ * Which programmes this role plans and reports on.
+ *
+ * The Afterschool Manager owns every afterschool class in every region and
+ * nothing else, so their whole job is the set of classes the app was dropping.
+ * Everyone else plans the school day, which is the behaviour that was hardcoded
+ * in three places before this.
+ */
+export function programmeScopeFor(role: Role): "exclude-afterschool" | "only-afterschool" {
+  return role === "AFTER_SCHOOL_MANAGER" ? "only-afterschool" : "exclude-afterschool";
+}
+
+/**
+ * The working day a plan is built against, or undefined for the app default
+ * (PLANNER_WORK_START/END, 08:00–17:00).
+ *
+ * The planner only proposes a class that fits ENTIRELY inside this window, and
+ * the afterschool programme at Norland runs 16:00–18:00 Miami — an hour past
+ * the default end. That alone made the Afterschool Manager's plan come back
+ * empty even after the programme filter was fixed: every class it was looking
+ * for was out of hours by definition, which is what "afterschool" means.
+ */
+export function workWindowFor(role: Role): { start: string; end: string } | undefined {
+  if (role === "AFTER_SCHOOL_MANAGER") return { start: "08:00", end: "19:00" };
+  return undefined;
+}
+
 export const TAB_IDS = ["dashboard", "planner", "history", "profiles", "map", "reports"] as const;
 export type TabId = (typeof TAB_IDS)[number];
 

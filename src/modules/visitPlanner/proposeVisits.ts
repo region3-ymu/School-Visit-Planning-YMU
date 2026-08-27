@@ -136,6 +136,8 @@ export async function proposeVisitsForWeek(
   const maxVisitsPerDay = options?.maxVisitsPerDay ?? DEFAULT_MAX_VISITS_PER_DAY;
   const distanceService = options?.distanceService;
   const regionId = options?.regionId;
+  const programmes = options?.programmes ?? "exclude-afterschool";
+  const onlyAfterschool = programmes === "only-afterschool";
 
   // Normalised through Miami rather than the host's zone: date-fns startOfWeek
   // reads the same instant as a different weekday depending on where the code
@@ -155,17 +157,35 @@ export async function proposeVisitsForWeek(
     ? { active: true, isOffice: false, regionId }
     : { active: true, isOffice: false };
 
+  // Planning afterschool means planning the schools that HAVE afterschool, not
+  // all 109 with the rest showing up as "no class scheduled this week". Asked of
+  // the whole table rather than this week's, so a school whose programme runs
+  // next week does not vanish from the cadence today.
+  let afterschoolSchoolIds: string[] | null = null;
+  if (onlyAfterschool) {
+    const rows = await prisma.classSession.findMany({
+      where: { subject: { name: { contains: "afterschool", mode: "insensitive" } } },
+      select: { schoolId: true },
+      distinct: ["schoolId"],
+    });
+    afterschoolSchoolIds = rows.map((r) => r.schoolId);
+  }
+
+  const scopedSchoolWhere = afterschoolSchoolIds
+    ? { ...schoolWhere, id: { in: afterschoolSchoolIds } }
+    : schoolWhere;
+
   const [schools, visitRules, doneVisits, classSessionsInWeek] = await Promise.all([
     prisma.school.findMany({
-      where: schoolWhere,
+      where: scopedSchoolWhere,
       select: { id: true, name: true, zipCode: true, lat: true, lng: true },
     }),
     prisma.visitRule.findMany({
-      where: { school: schoolWhere },
+      where: { school: scopedSchoolWhere },
       orderBy: { createdAt: "desc" }, // latest rule first
     }),
     prisma.visit.findMany({
-      where: { status: "DONE", school: schoolWhere },
+      where: { status: "DONE", school: scopedSchoolWhere },
       orderBy: { plannedStartDateTime: "desc" },
       // Mode matters here: a phone call is contact, not a visit. Counting one as
       // the school's last visit reset its cadence and stopped it being proposed,
@@ -187,7 +207,7 @@ export async function proposeVisitsForWeek(
       where: {
         startDateTime: { gte: weekStartNorm },
         endDateTime: { lt: weekEnd },
-        school: schoolWhere,
+        school: scopedSchoolWhere,
       },
       // The teacher comes along so the visit can record who was actually
       // observed, rather than leaving it to "whoever teaches here".
@@ -209,7 +229,8 @@ export async function proposeVisitsForWeek(
   // Class sessions indexed by schoolId+dayStr for O(1) lookup
   const sessionsBySchoolDay = new Map<string, typeof classSessionsInWeek[number][]>();
   for (const s of classSessionsInWeek) {
-    if (isAfterschool(s.subject?.name ?? "")) continue;
+    // The one line that decides whose plan this is.
+    if (isAfterschool(s.subject?.name ?? "") !== onlyAfterschool) continue;
     const key = `${s.schoolId}:${dayKeyInAppZone(s.startDateTime)}`;
     if (!sessionsBySchoolDay.has(key)) sessionsBySchoolDay.set(key, []);
     sessionsBySchoolDay.get(key)!.push(s);

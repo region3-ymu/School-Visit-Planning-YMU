@@ -36,8 +36,19 @@ export interface ProposedVisit {
   scheduleConflict?: boolean;
 }
 
+/**
+ * Which programmes a plan is about.
+ *
+ * "exclude" is the Regional Manager's view and the historical behaviour: an
+ * afterschool class is somebody else's programme, so it never counted as a
+ * reason to visit. "only" is the Afterschool Manager's, who owns exactly those
+ * classes across every region — for them the old filter hid the entire job.
+ */
+export type ProgrammeScope = "exclude-afterschool" | "only-afterschool";
+
 export interface ProposeVisitsOptions {
   regionId?: string;
+  programmes?: ProgrammeScope;
   maxVisitsPerWeek?: number;
   maxVisitsPerDay?: number;
   workWindow?: WorkWindow;
