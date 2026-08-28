@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { addDaysToDayKey, zonedDayStart } from "@/lib/timezone";
 
 export async function GET(request: NextRequest) {
   const session = await auth();
@@ -18,8 +19,12 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const dayStart = new Date(`${date}T00:00:00`);
-  const dayEnd = new Date(`${date}T23:59:59`);
+  // Miami's day, not the runtime's. A bare "2026-08-28T00:00:00" is parsed in
+  // whatever zone the process happens to be in — on Vercel that is UTC, so this
+  // window ran 8pm the previous evening to 8pm the requested day, returning the
+  // wrong classes for the date it was asked about.
+  const dayStart = zonedDayStart(date);
+  const dayEnd = new Date(zonedDayStart(addDaysToDayKey(date, 1)).getTime() - 1);
   if (Number.isNaN(dayStart.getTime()) || Number.isNaN(dayEnd.getTime())) {
     return NextResponse.json({ error: "Invalid date" }, { status: 400 });
   }

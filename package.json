@@ -10,6 +10,7 @@
     "icons": "node scripts/generate-icons.mjs",
     "check:order": "npx tsx scripts/check-visit-order.ts",
     "check:regions": "npx tsx scripts/check-regions.ts",
+    "check:timezones": "npx tsx scripts/check-calendar-timezones.ts",
     "sync:sheet": "npx tsx scripts/sync-sheet.ts",
     "db:seed": "npx tsx prisma/seed.ts",
     "import-schools": "npx tsx scripts/import-schools.ts",

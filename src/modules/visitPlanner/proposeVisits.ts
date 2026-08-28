@@ -96,6 +96,9 @@ const NEVER_VISITED_RANK = 999;
  * "nobody has been in a fortnight", which a run of phone calls can hide.
  */
 const NOT_SEEN_IN_PERSON_DAYS = 14;
+
+/** Where an admin visit lands on a day the school teaches nothing. */
+const NO_CLASS_VISIT_HOUR = 9;
 const MS_PER_WEEK = 7 * MS_PER_DAY;
 
 function getWeekNumber(date: Date): number {
@@ -377,7 +380,13 @@ export async function proposeVisitsForWeek(
         zipCode: school.zipCode,
         lat: school.lat ?? null,
         lng: school.lng ?? null,
-        date: hasClass ? bestSession.startDateTime : new Date(`${dayStr}T09:00:00`),
+        // zonedDayStart, not new Date("...T09:00:00"): a date string with no
+        // offset is parsed in the RUNTIME's zone, so this admin visit was 9am
+        // in Miami on a laptop and 9am UTC — 5am Miami — on Vercel. The same
+        // shape of bug YMU-A hit on its clock-in screen.
+        date: hasClass
+          ? bestSession.startDateTime
+          : new Date(zonedDayStart(dayStr).getTime() + NO_CLASS_VISIT_HOUR * 60 * 60 * 1000),
         startTime: hasClass ? formatTimeInAppZone(bestSession.startDateTime) : "09:00",
         endTime: hasClass ? formatTimeInAppZone(bestSession.endDateTime) : "10:00",
         score,
