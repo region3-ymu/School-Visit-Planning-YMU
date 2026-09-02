@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
+import stringSimilarity from "string-similarity";
 import { getGoogleCalendarClient } from "./client";
-import { matchByName } from "@/lib/schoolNames";
+import { matchByName, normalizeSchoolName, NAME_MATCH_THRESHOLD } from "@/lib/schoolNames";
 import type { GoogleCalendarEvent } from "@/lib/google/calendar";
 import type { SyncResult } from "./types";
 
@@ -43,12 +44,42 @@ async function getOrCreateTeacher(
   return created.id;
 }
 
-function extractTeacherNameFromEvent(event: GoogleCalendarEvent): string | null {
+/**
+ * True when `name` reads as the school's own name rather than a person's —
+ * same normalize-and-compare a calendar goes through to be pinned to a
+ * school in the first place (matchByName below), so "Charles R. Drew K-8"
+ * counts as the same name as "Dr. Charles R. Drew K-8 Center".
+ *
+ * Some school calendars are organized by the school's own shared account
+ * rather than the teacher's, so `event.organizer.displayName` is literally
+ * the school. Treating that as a teacher created a fake "Teacher" row named
+ * after the school for 41 schools in one sync — see the 2026-09 cleanup.
+ */
+function looksLikeTheSchoolItself(name: string, schoolName: string): boolean {
+  const a = normalizeSchoolName(name);
+  const b = normalizeSchoolName(schoolName);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // A combined-campus name ("Carrie P. Meek/Westview K-8") organizes under
+  // just its first half, which similarity alone scores too low (0.67) — but a
+  // long, word-bounded prefix match is exactly the same signal, not a coincidence.
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  if (shorter.length >= 8 && new RegExp(`\\b${shorter}\\b`).test(longer)) return true;
+  return stringSimilarity.compareTwoStrings(a, b) >= NAME_MATCH_THRESHOLD;
+}
+
+function extractTeacherNameFromEvent(event: GoogleCalendarEvent, schoolName: string): string | null {
   // `creator` is not on the declared type but Google does send it; the index
   // signature on GoogleCalendarEvent is what makes reading it type-safe.
   const creator = event.creator as { displayName?: string } | undefined;
   const fromOrganizer = event.organizer?.displayName || creator?.displayName || null;
-  if (typeof fromOrganizer === "string" && fromOrganizer.trim()) return fromOrganizer.trim();
+  if (
+    typeof fromOrganizer === "string" &&
+    fromOrganizer.trim() &&
+    !looksLikeTheSchoolItself(fromOrganizer, schoolName)
+  ) {
+    return fromOrganizer.trim();
+  }
 
   const desc = typeof event?.description === "string" ? event.description : "";
   const m = desc.match(/teacher\s*:\s*(.+)/i) || desc.match(/profesor\s*:\s*(.+)/i);
@@ -168,7 +199,7 @@ export async function syncSchoolCalendar(
         const endDate = new Date(end);
         const subjectName = (event.summary ?? "").trim() || "Unnamed";
         const subjectId = await getOrCreateSubject(prisma, subjectName);
-        const teacherName = extractTeacherNameFromEvent(event);
+        const teacherName = extractTeacherNameFromEvent(event, school.name);
         const teacherId = teacherName
           ? await getOrCreateTeacher(prisma, schoolId, teacherName)
           : null;

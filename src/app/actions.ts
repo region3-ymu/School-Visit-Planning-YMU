@@ -17,7 +17,7 @@ import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClien
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
 import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
-import { isAfterschoolClass, isAfterschoolTitle, minutesFromTimeString } from "@/lib/afterschool";
+import { isAfterschoolClass } from "@/lib/afterschool";
 import {
   canEditOthersVisits,
   canFilterByRegion,
@@ -476,10 +476,6 @@ export async function getSchoolOptionsForWeek(
   const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
   const start = zonedDayStart(weekKey);
   const weekEnd = zonedDayStart(addDaysToDayKey(weekKey, 5));
-  const weekDates = Array.from({ length: 5 }, (_, i) => addDays(start, i));
-
-  const school = await prisma.school.findUnique({ where: { id: schoolId } });
-  if (!school) return [];
 
   type ViableOption = import("@/lib/types").ViableOption;
   const seen = new Set<string>();
@@ -510,22 +506,13 @@ export async function getSchoolOptionsForWeek(
     });
   }
 
-  let rules: any[] = [];
-  try { rules = JSON.parse(school.availability); } catch { return merged; }
-  if (!Array.isArray(rules) || rules.length === 0) return merged;
-
-  for (const d of weekDates) {
-    const weekdayName = format(d, "EEEE");
-    for (const r of rules) {
-      // The school's own availability windows, which carry a "HH:mm" and no
-      // date — same classification rule, reached through the string form.
-      if (isAfterschoolTitle(r?.class, minutesFromTimeString(r?.start)) !== wantAfterschool) continue;
-      if (r.weekday && r.weekday !== weekdayName) continue;
-      if (!r.weekday) continue;
-      addOption({ date: format(d, "yyyy-MM-dd"), rule: r });
-    }
-  }
-
+  // School.availability, a hand-kept blob, used to be consulted here as a
+  // fallback. It goes stale the moment the real calendar changes — Edison
+  // Park's still claimed a Wednesday Modern Band/Drum Line slot the calendar
+  // had long since dropped, so "Add a visit" offered a class that didn't
+  // exist instead of falling through to the no-class/admin-visit message.
+  // The calendar is the only source of truth now, same as
+  // getSchoolCalendarOptionsForWeek and getSchoolWeeklySchedules.
   return merged;
 }
 

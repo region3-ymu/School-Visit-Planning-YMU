@@ -595,22 +595,30 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
                                                 <div className="flex items-center text-xs text-gray-500 dark:text-gray-400 mb-2 space-x-2">
 
-                                                    <div className="flex items-center"><Clock size={12} className="mr-1" /> {visit.startTime} - {visit.endTime}</div>
+                                                    <div className="flex items-center">
+                                                        <Clock size={12} className="mr-1" />
+                                                        {visit.classStartTime && visit.classEndTime
+                                                            ? `${visit.classStartTime} - ${visit.classEndTime}`
+                                                            : `${visit.startTime} - ${visit.endTime}`}
+                                                    </div>
 
                                                     <div className="flex items-center"><MapPin size={12} className="mr-1" /> {visit.zipCode}</div>
 
                                                 </div>
 
-                                                {/* The times above are the 20-minute drop-in. Showing the class it sits
-                                                    inside makes clear whether you are catching the start or the end. */}
-                                                {visit.classStartTime && visit.classEndTime && (
+                                                {/* The full class period is the headline now; the 20-minute drop-in this
+                                                    plan actually recommends goes underneath, in parentheses — only shown
+                                                    when it's a slice of the class rather than the whole thing. */}
+                                                {visit.classStartTime && visit.classEndTime &&
+                                                    (visit.startTime !== visit.classStartTime || visit.endTime !== visit.classEndTime) && (
                                                     <div className="text-[11px] text-gray-400 dark:text-gray-500 -mt-1 mb-2">
-                                                        Class runs {visit.classStartTime} - {visit.classEndTime}
+                                                        (Recommended visit: {visit.startTime} - {visit.endTime}
                                                         {visit.startTime === visit.classStartTime
                                                             ? " · first 20 min"
                                                             : visit.endTime === visit.classEndTime
                                                                 ? " · last 20 min"
                                                                 : ""}
+                                                        )
                                                     </div>
                                                 )}
 
