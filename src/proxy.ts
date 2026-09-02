@@ -16,8 +16,17 @@ const { auth } = NextAuth(authConfig);
  *                       gone — which is precisely when it cannot check a
  *                       session. Extension-less, so the matcher's file rule
  *                       does not cover it.
+ *   /api/cron           Vercel's cron invoker calls these with no session —
+ *                       it is not a browser, it cannot log in. Each route
+ *                       under here checks its own `Authorization: Bearer
+ *                       $CRON_SECRET` (see src/app/api/cron/*), so exempting
+ *                       the path from this session gate does not remove that
+ *                       check, it lets the route's own check run at all.
+ *                       Without this, every cron hit this redirect first and
+ *                       never reached the handler — the calendar sync had not
+ *                       run in five days and this is why.
  */
-const PUBLIC_PATHS = ["/api/auth", "/login", "/~offline"];
+const PUBLIC_PATHS = ["/api/auth", "/login", "/~offline", "/api/cron"];
 
 export default auth((req) => {
   const isLoggedIn = !!req.auth;
