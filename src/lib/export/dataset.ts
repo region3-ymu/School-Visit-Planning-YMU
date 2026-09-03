@@ -115,10 +115,12 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
           const back = decimalToNumber(v.returnMilesDriven) ?? 0;
           const commute =
             (decimalToNumber(v.commuteMiles) ?? 0) + (decimalToNumber(v.returnCommuteMiles) ?? 0);
-          // Van miles are YMU's own fuel and owed to nobody, so this column is
-          // a hard zero for them rather than blank — blank reads as "not
-          // measured", which is a different thing and already has a meaning here.
-          const reimbursable = v.vehicle === "YMU_VAN" ? 0 : Math.max(0, out + back - commute);
+          // Van miles are YMU's own fuel, and a ride in someone else's car is
+          // nobody's fuel to reimburse to this RM — both are a hard zero
+          // rather than blank, since blank reads as "not measured", which is
+          // a different thing and already has a meaning here.
+          const reimbursable =
+            v.vehicle === "YMU_VAN" || v.vehicle === "OTHER_PERSON_CAR" ? 0 : Math.max(0, out + back - commute);
           return [
             v.id, date(v.plannedStartDateTime), time(v.plannedStartDateTime), v.school.name, v.school.id,
             v.school.region?.code ?? "", v.status, v.mode, v.vehicle,

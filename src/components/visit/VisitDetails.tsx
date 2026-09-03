@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Car, MapPin, Music, Truck, User } from "lucide-react";
+import { Building2, Car, MapPin, Music, Truck, User, Users } from "lucide-react";
 import {
   OBSERVATION_DOMAINS,
   RATING_OPTIONS,
@@ -77,16 +77,18 @@ export default function VisitDetails({ visit }: { visit: VisitDetailsData }) {
   const driven = (visit.milesDriven ?? 0) + (visit.returnMilesDriven ?? 0);
   const commute = (visit.commuteMiles ?? 0) + (visit.returnCommuteMiles ?? 0);
   const isVan = visit.vehicle === "YMU_VAN";
-  const payable = isVan ? 0 : Math.max(0, driven - commute);
+  const isOtherCar = visit.vehicle === "OTHER_PERSON_CAR";
+  const payable = isVan || isOtherCar ? 0 : Math.max(0, driven - commute);
+  const vehicleLabel = isVan ? " · YMU van" : isOtherCar ? " · someone else's car" : " · own car";
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-5 p-5 bg-gray-50 dark:bg-zinc-800/30 border-t border-gray-100 dark:border-zinc-800">
       <Section title="Visit">
         <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
           <span className="inline-flex items-center gap-1.5">
-            {isVan ? <Truck size={14} /> : <Car size={14} />}
+            {isVan ? <Truck size={14} /> : isOtherCar ? <Users size={14} /> : <Car size={14} />}
             {MODE_LABELS[visit.mode] ?? visit.mode}
-            {visit.mode === "IN_PERSON" && (isVan ? " · YMU van" : " · own car")}
+            {visit.mode === "IN_PERSON" && vehicleLabel}
           </span>
           {visit.visitedByName && (
             <span className="inline-flex items-center gap-1.5 text-gray-500 dark:text-gray-400">

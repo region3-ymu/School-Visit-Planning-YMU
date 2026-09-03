@@ -20,7 +20,9 @@ export function renderMileageCsv(data: MileageReportData): string {
         csvEscape(v.visitedByName),
         v.date.toISOString().slice(0, 10),
         csvEscape(v.mode),
-        csvEscape(v.vehicle === "YMU_VAN" ? "YMU Van" : "Personal"),
+        csvEscape(
+          v.vehicle === "YMU_VAN" ? "YMU Van" : v.vehicle === "OTHER_PERSON_CAR" ? "Other's Car" : "Personal"
+        ),
         v.milesDriven.toFixed(2),
         v.returnMiles.toFixed(2),
         (v.milesDriven + v.returnMiles).toFixed(2),

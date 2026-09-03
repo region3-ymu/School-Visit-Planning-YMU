@@ -343,6 +343,11 @@ enum VisitMode {
 enum VehicleType {
   PERSONAL
   YMU_VAN
+  /// Rode along in a colleague's or someone else's personal car — an in-person
+  /// visit, but not the RM's own fuel, so its miles are recorded and never owed
+  /// back to them either, same as YMU_VAN but tracked apart since it isn't
+  /// YMU's vehicle.
+  OTHER_PERSON_CAR
 }
 
 enum VisitedWithOption {

@@ -580,8 +580,9 @@ const confirmVisitSchema = z
     // In person is the default; online and phone visits skip the drive and
     // the classroom observation entirely.
     mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
-    // Van miles are measured but never reimbursed; see the mileage report.
-    vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
+    // Van and other-person's-car miles are measured but never reimbursed;
+    // see the mileage report.
+    vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).default("PERSONAL"),
     // Who the ratings are about. Taken from the class slot the visit was booked
     // against, so it needs no asking in the planner's flow.
     observedTeacherId: z.string().optional(),
@@ -1017,7 +1018,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
  */
 const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
-  vehicle: z.enum(["PERSONAL", "YMU_VAN"]).default("PERSONAL"),
+  vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).default("PERSONAL"),
   observedTeacherId: z.string().optional(),
   origin: originCoordsSchema.optional(),
   notes: z.string().max(2000).optional(),
@@ -1160,6 +1161,7 @@ export async function getMyDayStatus(dateIso: string) {
 
   const personal = visits.filter((v) => v.vehicle === "PERSONAL");
   const van = visits.filter((v) => v.vehicle === "YMU_VAN");
+  const otherCar = visits.filter((v) => v.vehicle === "OTHER_PERSON_CAR");
 
   const drivenMiles = personal.reduce((sum, v) => sum + drivenOf(v), 0);
   const commuteMiles = personal.reduce((sum, v) => sum + commuteOf(v), 0);
@@ -1174,6 +1176,9 @@ export async function getMyDayStatus(dateIso: string) {
     // What that comes to as a reimbursement.
     totalMiles: drivenMiles - commuteMiles,
     vanMiles: van.reduce((sum, v) => sum + drivenOf(v), 0),
+    // Rode along with someone else — recorded, owed to nobody, tracked apart
+    // from the van because it isn't YMU's fuel either.
+    otherCarMiles: otherCar.reduce((sum, v) => sum + drivenOf(v), 0),
   };
 }
 
@@ -1527,7 +1532,7 @@ export async function deleteVisitLog(id: string) {
  */
 const editVisitSchema = z.object({
   notes: z.string().max(2000).optional(),
-  vehicle: z.enum(["PERSONAL", "YMU_VAN"]).optional(),
+  vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).optional(),
   observedTeacherId: z.string().nullable().optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).optional(),
   principalNotes: z.string().max(2000).optional(),

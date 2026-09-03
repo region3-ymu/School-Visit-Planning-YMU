@@ -14,6 +14,12 @@ export type MileageReportData = {
   vanMiles: number;
   vanVisitCount: number;
   /**
+   * Rode along in someone else's personal car. Recorded, owed to nobody —
+   * same treatment as the van, tracked apart because it isn't YMU's fuel.
+   */
+  otherCarMiles: number;
+  otherCarVisitCount: number;
+  /**
    * Visits made by phone or video. No miles by definition, so they never touch
    * the mileage figures — but they are work done, and a month of them would
    * otherwise read as a month of nothing.
@@ -27,6 +33,7 @@ export type MileageReportData = {
     commuteMiles: number;
     visitCount: number;
     vanMiles: number;
+    otherCarMiles: number;
   }[];
   bySchool: { schoolId: string; schoolName: string; regionName: string | null; totalMiles: number; visitCount: number }[];
   visits: {
@@ -128,6 +135,8 @@ export async function getMileageReportData(
   let commuteMiles = 0;
   let vanMiles = 0;
   let vanVisitCount = 0;
+  let otherCarMiles = 0;
+  let otherCarVisitCount = 0;
   let onlineVisitCount = 0;
   let phoneVisitCount = 0;
 
@@ -147,25 +156,32 @@ export async function getMileageReportData(
     const commute =
       (decimalToNumber(v.commuteMiles) ?? 0) + (decimalToNumber(v.returnCommuteMiles) ?? 0);
 
-    // Van driving is YMU's own fuel, so it is tracked apart and never reaches
-    // the totals a reimbursement is calculated from.
+    // Van driving is YMU's own fuel, and a ride in someone else's car is
+    // nobody's fuel to reimburse to this RM — both are tracked apart and
+    // never reach the totals a reimbursement is calculated from.
     const isVan = v.vehicle === "YMU_VAN";
+    const isOtherCar = v.vehicle === "OTHER_PERSON_CAR";
     if (isVan) {
       vanMiles += miles;
       vanVisitCount += 1;
+    } else if (isOtherCar) {
+      otherCarMiles += miles;
+      otherCarVisitCount += 1;
     } else {
       drivenMiles += miles;
       commuteMiles += commute;
     }
-    const reimbursable = isVan ? 0 : Math.max(0, miles - commute);
+    const reimbursable = isVan || isOtherCar ? 0 : Math.max(0, miles - commute);
 
     const rmId = v.visitedById ?? "unknown";
     const rmName = v.visitedBy?.name ?? v.visitedBy?.email ?? "Unknown";
     const rmEntry =
       byRMMap.get(rmId) ??
-      { userId: rmId, userName: rmName, totalMiles: 0, commuteMiles: 0, visitCount: 0, vanMiles: 0 };
+      { userId: rmId, userName: rmName, totalMiles: 0, commuteMiles: 0, visitCount: 0, vanMiles: 0, otherCarMiles: 0 };
     if (isVan) {
       rmEntry.vanMiles += miles;
+    } else if (isOtherCar) {
+      rmEntry.otherCarMiles += miles;
     } else {
       rmEntry.totalMiles += reimbursable;
       rmEntry.commuteMiles += commute;
@@ -212,6 +228,8 @@ export async function getMileageReportData(
     commuteMiles,
     vanMiles,
     vanVisitCount,
+    otherCarMiles,
+    otherCarVisitCount,
     onlineVisitCount,
     phoneVisitCount,
     byRM: [...byRMMap.values()].sort((a, b) => b.totalMiles - a.totalMiles),

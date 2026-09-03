@@ -565,6 +565,8 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     ` − ${dayStatus.commuteMiles.toFixed(1)} commute`}
                                 {dayStatus.vanMiles > 0 &&
                                     ` · ${dayStatus.vanMiles.toFixed(1)} in the van`}
+                                {dayStatus.otherCarMiles > 0 &&
+                                    ` · ${dayStatus.otherCarMiles.toFixed(1)} in someone else's car`}
                             </p>
                         </div>
                     </div>
@@ -631,30 +633,34 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                             <td className="px-6 py-4 whitespace-nowrap text-gray-700 dark:text-gray-300">
                                                 {log.milesDriven == null && log.returnMilesDriven == null ? (
                                                     <span className="text-gray-400">—</span>
-                                                ) : (
-                                                    <span
-                                                        title={log.originLabel ? `From ${log.originLabel}` : undefined}
-                                                        className={log.vehicle === "YMU_VAN" ? "text-gray-400" : undefined}
-                                                    >
-                                                        {(
-                                                            (log.milesDriven ?? 0) +
-                                                            (log.returnMilesDriven ?? 0) -
-                                                            (log.vehicle === "YMU_VAN"
-                                                                ? (log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)
-                                                                : (log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0))
-                                                        ).toFixed(1)}
-                                                        {(log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0) > 0 && (
-                                                            <span className="text-xs text-gray-400 ml-1">
-                                                                of {((log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0)).toFixed(1)} driven
-                                                            </span>
-                                                        )}
-                                                        {log.vehicle === "YMU_VAN" && (
-                                                            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-400 text-xs font-semibold align-middle">
-                                                                Van
-                                                            </span>
-                                                        )}
-                                                    </span>
-                                                )}
+                                                ) : (() => {
+                                                    const notOwed = log.vehicle === "YMU_VAN" || log.vehicle === "OTHER_PERSON_CAR";
+                                                    const driven = (log.milesDriven ?? 0) + (log.returnMilesDriven ?? 0);
+                                                    const commute = notOwed ? driven : (log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0);
+                                                    return (
+                                                        <span
+                                                            title={log.originLabel ? `From ${log.originLabel}` : undefined}
+                                                            className={notOwed ? "text-gray-400" : undefined}
+                                                        >
+                                                            {(driven - commute).toFixed(1)}
+                                                            {(log.commuteMiles ?? 0) + (log.returnCommuteMiles ?? 0) > 0 && (
+                                                                <span className="text-xs text-gray-400 ml-1">
+                                                                    of {driven.toFixed(1)} driven
+                                                                </span>
+                                                            )}
+                                                            {log.vehicle === "YMU_VAN" && (
+                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-400 text-xs font-semibold align-middle">
+                                                                    Van
+                                                                </span>
+                                                            )}
+                                                            {log.vehicle === "OTHER_PERSON_CAR" && (
+                                                                <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-zinc-800 dark:text-gray-400 text-xs font-semibold align-middle">
+                                                                    Other&apos;s car
+                                                                </span>
+                                                            )}
+                                                        </span>
+                                                    );
+                                                })()}
                                             </td>
                                             <td className="px-6 py-4 text-gray-500 dark:text-gray-400">
                                                 {log.notes}

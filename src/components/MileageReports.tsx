@@ -150,18 +150,31 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
       ) : data ? (
         <>
           {/* Reimbursable is the headline because it is the only figure anyone
-              acts on. The other two cards say what was taken off it and why:
-              the commute at each end of the day, and the van. */}
-          <div className={`grid grid-cols-1 gap-4 mb-6 ${data.vanMiles > 0 ? "sm:grid-cols-4" : "sm:grid-cols-3"}`}>
+              acts on. The other cards say what was taken off it and why: the
+              commute at each end of the day, the van, and a ride in someone
+              else's car. */}
+          <div
+            className={`grid grid-cols-1 gap-4 mb-6 ${
+              // Literal class names, not a computed "sm:grid-cols-${n}" —
+              // Tailwind only generates classes it can see written out.
+              { 3: "sm:grid-cols-3", 4: "sm:grid-cols-4", 5: "sm:grid-cols-5" }[
+                3 + (data.vanMiles > 0 ? 1 : 0) + (data.otherCarMiles > 0 ? 1 : 0)
+              ]
+            }`}
+          >
             <SummaryCard label="Reimbursable miles" value={data.totalMiles.toFixed(1)} highlight />
             <SummaryCard label="Total driven" value={data.drivenMiles.toFixed(1)} />
             <SummaryCard label="Commute (not paid)" value={data.commuteMiles.toFixed(1)} />
             {data.vanMiles > 0 && <SummaryCard label="YMU van (not owed)" value={data.vanMiles.toFixed(1)} />}
+            {data.otherCarMiles > 0 && (
+              <SummaryCard label="Other's car (not owed)" value={data.otherCarMiles.toFixed(1)} />
+            )}
           </div>
 
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             {data.period.label} · {data.visits.length} visit{data.visits.length === 1 ? "" : "s"}
             {data.vanVisitCount > 0 && `, ${data.vanVisitCount} in the van`}
+            {data.otherCarVisitCount > 0 && `, ${data.otherCarVisitCount} in someone else's car`}
             {(data.onlineVisitCount > 0 || data.phoneVisitCount > 0) && (
               <>
                 {" · "}
@@ -206,13 +219,14 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
 
           <ReportTable
             title="By Regional Manager"
-            headers={["Regional Manager", "Visits", "Reimbursable", "Commute", "Van"]}
+            headers={["Regional Manager", "Visits", "Reimbursable", "Commute", "Van", "Other's car"]}
             rows={data.byRM.map((r) => [
               r.userName,
               String(r.visitCount),
               r.totalMiles.toFixed(1),
               r.commuteMiles > 0 ? r.commuteMiles.toFixed(1) : "—",
               r.vanMiles > 0 ? r.vanMiles.toFixed(1) : "—",
+              r.otherCarMiles > 0 ? r.otherCarMiles.toFixed(1) : "—",
             ])}
           />
 
