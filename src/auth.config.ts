@@ -2,6 +2,16 @@ import type { NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 
 /**
+ * Email domains allowed to sign in with Google.
+ *
+ * Two, not one: staff mail is @ymu.org, but the Academic Manager's address is
+ * on @youngmusiciansunite.org — the organisation's other domain. The `hd` hint
+ * on the provider below can only carry one, so it stays on the common case and
+ * this list is the authority.
+ */
+const ALLOWED_SIGN_IN_DOMAINS = ["@ymu.org", "@youngmusiciansunite.org"] as const;
+
+/**
  * The half of the auth config that can run in the Edge runtime.
  *
  * The middleware (src/proxy.ts) runs on every request, and on Vercel it runs at
@@ -52,7 +62,20 @@ export default {
     async signIn({ account, profile }) {
       if (account?.provider === "google") {
         // Defense-in-depth: the hd param is only a UI hint; validate the domain here.
-        return Boolean(profile?.email?.endsWith("@ymu.org"));
+        //
+        // Both domains, because the organisation uses both: the Academic
+        // Manager is jpelaez@youngmusiciansunite.org, and checking only
+        // "@ymu.org" silently refused his Google sign-in — the same
+        // fails-with-nothing-on-screen symptom that allowDangerousEmailAccountLinking
+        // above was added to fix. He could still get in with a password, which
+        // is why it went unnoticed.
+        //
+        // Deliberately still a domain check and not an allowlist: this app is
+        // administration-only. YMU-A and the inventory app cannot do this —
+        // their teachers sign in with personal Gmail — so those two gate on
+        // whether the person is already on the roster instead.
+        const email = profile?.email?.toLowerCase() ?? "";
+        return ALLOWED_SIGN_IN_DOMAINS.some((d) => email.endsWith(d));
       }
       return true;
     },
