@@ -375,11 +375,19 @@ export async function getWeeklyPlan(
   // Apply pinned overrides
   for (const o of manualOverrides) {
     if (o.isPinned && o.schoolId && o.date) {
-      const key = `${o.schoolId}:${format(new Date(o.date), "yyyy-MM-dd")}`;
-      if (plan.some((v) => `${v.schoolId}:${format(v.date, "yyyy-MM-dd")}` === key)) continue;
+      // Time is part of the identity here, not just school + day: Horace Mann
+      // runs Music Production twice on a B day, and a second pin for the same
+      // school that day is a second visit, not a re-pin of the first.
+      const dateKey = format(new Date(o.date), "yyyy-MM-dd");
+      const key = `${o.schoolId}:${dateKey}:${o.startTime ?? "09:00"}`;
+      if (plan.some((v) => `${v.schoolId}:${format(v.date, "yyyy-MM-dd")}:${v.startTime}` === key)) continue;
       const school = await prisma.school.findUnique({ where: { id: o.schoolId } });
       if (school) {
-        plan = plan.filter((v) => v.schoolId !== o.schoolId || v.isCompleted);
+        // Drop only this school's un-pinned auto-proposal — a pin already
+        // placed for a different time slot at the same school (that other
+        // Horace Mann class) must survive, not get evicted by whichever pin
+        // happens to be processed last.
+        plan = plan.filter((v) => v.schoolId !== o.schoolId || v.isCompleted || v.isPinned);
         plan.push({
           schoolId: school.id,
           schoolName: school.name,
@@ -481,7 +489,11 @@ export async function getSchoolOptionsForWeek(
   const seen = new Set<string>();
   const merged: ViableOption[] = [];
   const addOption = (opt: ViableOption) => {
-    const key = `${opt.date}-${opt.rule.start}-${opt.rule.end}`;
+    // The class name is part of what makes two options the same slot, not
+    // just the date and time — Young Men's Prep runs Modern Band and Drumline
+    // back to back at the identical Mon/Wed/Thu 12:40-14:10 window, and
+    // keying on time alone silently dropped whichever one wasn't seen first.
+    const key = `${opt.date}-${opt.rule.start}-${opt.rule.end}-${opt.rule.class ?? ""}`;
     if (seen.has(key)) return;
     seen.add(key);
     merged.push(opt);

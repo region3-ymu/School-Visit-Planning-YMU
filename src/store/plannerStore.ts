@@ -42,8 +42,18 @@ export const usePlannerStore = create<PlannerState>()(
 
             manualOverrides: [],
             addOverride: (override) => set((state) => {
+                // Same school + same day is NOT the same override when it's a pin:
+                // Horace Mann teaches Music Production twice on a B day, and pinning
+                // the second slot must not overwrite the first — matched on start
+                // time too, so only re-pinning the identical slot updates it in
+                // place. A skip carries no startTime, so skips still dedupe against
+                // each other by school + day alone, which is what "skip this school
+                // that day" means regardless of which class.
                 const existingIndex = state.manualOverrides.findIndex(
-                    (o) => o.schoolId === override.schoolId && o.date && override.date && format(new Date(o.date), 'yyyy-MM-dd') === format(new Date(override.date), 'yyyy-MM-dd')
+                    (o) =>
+                        o.schoolId === override.schoolId &&
+                        o.date && override.date && format(new Date(o.date), 'yyyy-MM-dd') === format(new Date(override.date), 'yyyy-MM-dd') &&
+                        o.startTime === override.startTime
                 );
                 if (existingIndex >= 0) {
                     const newOverrides = [...state.manualOverrides];
