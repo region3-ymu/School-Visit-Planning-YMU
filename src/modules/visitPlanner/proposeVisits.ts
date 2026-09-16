@@ -276,6 +276,7 @@ export async function proposeVisitsForWeek(
     score: number;
     reason: string;
     subjectName?: string;
+    subjectId?: string;
     teacherId?: string;
     teacherName?: string;
     notSeenInPerson: boolean;
@@ -294,6 +295,7 @@ export async function proposeVisitsForWeek(
       classStart: Date;
       classEnd: Date;
       subjectName?: string;
+      subjectId?: string;
       teacherId?: string;
       teacherName?: string;
     }[];
@@ -399,6 +401,7 @@ export async function proposeVisitsForWeek(
         score,
         reason: reasonText,
         subjectName: bestSession?.subject?.name,
+        subjectId: bestSession?.subject?.id,
         notSeenInPerson,
         weeksSinceInPerson,
         teacherId: bestSession?.teacher?.externalId ? bestSession.teacher.id : undefined,
@@ -414,6 +417,7 @@ export async function proposeVisitsForWeek(
               classStart: s.startDateTime,
               classEnd: s.endDateTime,
               subjectName: s.subject?.name,
+              subjectId: s.subject?.id,
               // Only a teacher imported from YMU-A; a leftover calendar row is a
               // school name, not a person to attribute a rating to.
               teacherId: s.teacher?.externalId ? s.teacher.id : undefined,
@@ -465,6 +469,7 @@ export async function proposeVisitsForWeek(
     classStart: Date;
     classEnd: Date;
     subjectName?: string;
+    subjectId?: string;
     teacherId?: string;
     teacherName?: string;
   };
@@ -583,6 +588,7 @@ export async function proposeVisitsForWeek(
         classStartTime: formatTimeInAppZone(slot.classStart),
         classEndTime: formatTimeInAppZone(slot.classEnd),
         subjectName: slot.subjectName,
+        subjectId: slot.subjectId,
         teacherId: slot.teacherId,
         teacherName: slot.teacherName,
         notSeenInPerson: candidate.notSeenInPerson,
@@ -637,6 +643,7 @@ export async function proposeVisitsForWeek(
         score: c.score,
         reason: c.reason,
         subjectName: c.subjectName,
+        subjectId: c.subjectId,
         teacherId: c.teacherId,
         teacherName: c.teacherName,
         notSeenInPerson: c.notSeenInPerson,

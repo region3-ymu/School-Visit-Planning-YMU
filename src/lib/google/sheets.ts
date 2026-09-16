@@ -114,12 +114,55 @@ async function call(
   return response.json();
 }
 
-/** The tabs a spreadsheet already has, by title. */
-export async function listTabs(sa: GoogleServiceAccount, sheetId: string): Promise<Set<string>> {
-  const meta = (await call(sa, `/${sheetId}?fields=sheets.properties.title`)) as {
-    sheets?: { properties: { title: string } }[];
+/** A tab's size. Cells outside it cannot be written to until it is grown. */
+export type TabGrid = { rowCount: number; columnCount: number };
+
+/**
+ * The tabs a spreadsheet already has, by title, with the size of each.
+ *
+ * The sizes are not decoration. A tab is a fixed grid, and values.update
+ * REFUSES a write that falls outside it — "exceeds grid limits" — rather than
+ * growing to fit the way append does. A tab created at Google's default 1000
+ * rows by 26 columns therefore silently caps the export at 26 columns, and the
+ * Visits tab is well past that. Knowing the current size is what lets writeTab
+ * grow it first.
+ */
+export async function listTabs(
+  sa: GoogleServiceAccount,
+  sheetId: string
+): Promise<Map<string, TabGrid>> {
+  const meta = (await call(
+    sa,
+    `/${sheetId}?fields=sheets.properties(title,gridProperties(rowCount,columnCount))`
+  )) as {
+    sheets?: { properties: { title: string; gridProperties?: Partial<TabGrid> } }[];
   };
-  return new Set((meta.sheets ?? []).map((s) => s.properties.title));
+  return new Map(
+    (meta.sheets ?? []).map((s) => [
+      s.properties.title,
+      {
+        rowCount: s.properties.gridProperties?.rowCount ?? 0,
+        columnCount: s.properties.gridProperties?.columnCount ?? 0,
+      },
+    ])
+  );
+}
+
+/**
+ * The numeric id Sheets wants for updateSheetProperties, which is not the tab
+ * title everything else here is keyed by.
+ */
+async function tabIdFor(
+  sa: GoogleServiceAccount,
+  sheetId: string,
+  title: string
+): Promise<number> {
+  const meta = (await call(sa, `/${sheetId}?fields=sheets.properties(sheetId,title)`)) as {
+    sheets?: { properties: { sheetId: number; title: string } }[];
+  };
+  const match = (meta.sheets ?? []).find((s) => s.properties.title === title);
+  if (!match) throw new Error(`Tab "${title}" vanished between reading and writing it`);
+  return match.properties.sheetId;
 }
 
 /**
@@ -135,15 +178,58 @@ export async function writeTab(
   sheetId: string,
   title: string,
   rows: SheetCell[][],
-  existingTabs?: Set<string>
+  existingTabs?: Map<string, TabGrid>
 ): Promise<void> {
   const tabs = existingTabs ?? (await listTabs(sa, sheetId));
-  if (!tabs.has(title)) {
+
+  // What the data needs. Rows are not all the same length in general, so the
+  // width is the widest one and not the header's — a row longer than the grid
+  // fails the whole write just as surely as a header would.
+  const needed: TabGrid = {
+    rowCount: Math.max(rows.length, 1),
+    columnCount: Math.max(...rows.map((r) => r.length), 1),
+  };
+
+  const current = tabs.get(title);
+  if (!current) {
+    // Sized to the data but never below Google's own default, so a new tab has
+    // the same room to the right and below that every other tab here has — a
+    // four-row Quarters tab pinned to exactly four rows would be a worse place
+    // to jot a formula than the blank sheet it replaced.
+    const created: TabGrid = {
+      rowCount: Math.max(needed.rowCount, 1000),
+      columnCount: Math.max(needed.columnCount, 26),
+    };
     await call(sa, `/${sheetId}:batchUpdate`, {
       method: "POST",
-      body: JSON.stringify({ requests: [{ addSheet: { properties: { title } } }] }),
+      body: JSON.stringify({
+        requests: [{ addSheet: { properties: { title, gridProperties: created } } }],
+      }),
     });
-    tabs.add(title);
+    tabs.set(title, created);
+  } else if (current.rowCount < needed.rowCount || current.columnCount < needed.columnCount) {
+    // Grown, never shrunk. A column added to the export must not fail the
+    // sync, and a tab left wider than today's data costs nothing but empty
+    // cells — whereas shrinking one would delete whatever a reader had put in
+    // the columns to the right, which on this spreadsheet is their formulas.
+    const grown: TabGrid = {
+      rowCount: Math.max(current.rowCount, needed.rowCount),
+      columnCount: Math.max(current.columnCount, needed.columnCount),
+    };
+    await call(sa, `/${sheetId}:batchUpdate`, {
+      method: "POST",
+      body: JSON.stringify({
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: { sheetId: await tabIdFor(sa, sheetId, title), gridProperties: grown },
+              fields: "gridProperties.rowCount,gridProperties.columnCount",
+            },
+          },
+        ],
+      }),
+    });
+    tabs.set(title, grown);
   }
 
   // Quoted because a tab title with a space is otherwise read as a range.

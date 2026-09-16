@@ -30,6 +30,9 @@ export interface VisitInfo {
   classEndTime?: string;
   /** Program/subject name for the class at this time (e.g. "Drumline", "Modern Band") */
   subjectName?: string;
+  /** That programme's Subject id — what a confirmed visit records as the
+   *  programme it watched, so the export can say so without matching names. */
+  subjectId?: string;
   teacherId?: string;
   teacherName?: string;
   /** Nobody has physically been to this school in a fortnight or more. */

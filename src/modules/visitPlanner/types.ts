@@ -21,6 +21,7 @@ export interface ProposedVisit {
   score: number;
   reason: string;
   subjectName?: string;
+  subjectId?: string;
   teacherId?: string;
   teacherName?: string;
   /** Nobody has physically been to this school in a fortnight or more. */

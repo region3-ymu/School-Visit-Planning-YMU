@@ -40,6 +40,7 @@ export default function ConfirmVisitModal({
   schoolLat,
   schoolLng,
   subjectName,
+  subjectId,
   teacherId,
   teacherName,
   onClose,
@@ -51,6 +52,8 @@ export default function ConfirmVisitModal({
   schoolLat?: number;
   schoolLng?: number;
   subjectName?: string;
+  /** The programme this slot is — what the ratings below were watching. */
+  subjectId?: string;
   /** The teacher whose class this slot is — the ratings below are about them. */
   teacherId?: string;
   teacherName?: string;
@@ -252,6 +255,10 @@ export default function ConfirmVisitModal({
         vehicle,
         // Only meaningful alongside a rubric; a phone call observes nobody.
         observedTeacherId: showTeacherObservation ? teacherId : undefined,
+        // Sent unconditionally, unlike the teacher: which programme was running
+        // is a fact about the visit, true whether or not anybody was rated.
+        // The server fills it in from the slot when an older client omits it.
+        observedSubjectId: subjectId,
         origin,
         visitedWith,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,

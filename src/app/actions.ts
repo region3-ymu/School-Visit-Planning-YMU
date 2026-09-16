@@ -19,6 +19,8 @@ import { decimalToNumber } from "@/lib/decimal";
 import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
 import { isAfterschoolClass } from "@/lib/afterschool";
 import {
+  OVERSIGHT_ROLES,
+  canAdministerApp,
   canEditOthersVisits,
   canFilterByRegion,
   canManageSchoolData,
@@ -28,6 +30,7 @@ import {
   seesAllRegions,
   workWindowFor,
 } from "@/lib/permissions";
+import { syncDatasetToSheet } from "@/lib/export/syncSheet";
 import { haversineMeters } from "@/lib/geo";
 import {
   APP_TIME_ZONE,
@@ -605,6 +608,9 @@ const confirmVisitSchema = z
     // Who the ratings are about. Taken from the class slot the visit was booked
     // against, so it needs no asking in the planner's flow.
     observedTeacherId: z.string().optional(),
+    // Which programme was in the room, from that same slot. Optional because an
+    // older client does not send it; the server then works it out itself.
+    observedSubjectId: z.string().optional(),
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
     principalNotes: z.string().max(2000).optional(),
@@ -796,6 +802,39 @@ async function computeLegMiles(
   return null;
 }
 
+/**
+ * Which programme a visit watched, when the client did not name one.
+ *
+ * The planner names it outright: it booked the visit against a class slot and
+ * knows which. Two paths cannot — a client from before the field existed, and
+ * the Log Visit form, which asks for a day and never for a period. Left alone
+ * those write the blank this column was added to stop.
+ *
+ * Given the class time, the slot running at that moment is the answer and
+ * there is nothing to infer. Falling back to the day only counts when the day
+ * is unambiguous: one programme taught there that day leaves no choice to
+ * make, two would have this function making it, and a programme guessed onto a
+ * rating reads afterwards as something the RM recorded. That is the same line
+ * observedTeacherId draws — better blank than a plausible name.
+ */
+async function observedSubjectFor(schoolId: string, when: Date): Promise<string | undefined> {
+  const running = await prisma.classSession.findFirst({
+    where: { schoolId, startDateTime: { lte: when }, endDateTime: { gt: when } },
+    select: { subjectId: true },
+    orderBy: { startDateTime: "asc" },
+  });
+  if (running) return running.subjectId;
+
+  const { dayStart, dayEnd } = dayRangeFor(when);
+  const sameDay = await prisma.classSession.findMany({
+    where: { schoolId, startDateTime: { gte: dayStart, lt: dayEnd } },
+    select: { subjectId: true },
+    distinct: ["subjectId"],
+    take: 2,
+  });
+  return sameDay.length === 1 ? sameDay[0].subjectId : undefined;
+}
+
 export async function confirmVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
@@ -858,6 +897,13 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
     }
   }
 
+  // dateIso is the class slot's start, not plannedStart — plannedStart is the
+  // route position this stop takes in the RM's day and has nothing to do with
+  // when the class runs.
+  const observedSubjectId = isRemote
+    ? undefined
+    : data.observedSubjectId ?? (await observedSubjectFor(schoolId, date));
+
   const visit = await prisma.$transaction(async (tx) => {
     // Cancel any PLANNED visit for this school+day before writing DONE
     await tx.visit.updateMany({
@@ -880,6 +926,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         vehicle: data.vehicle,
         // Never on a remote visit: there is no class in the room to rate.
         observedTeacherId: isRemote ? undefined : data.observedTeacherId,
+        observedSubjectId,
         milesDriven: milesDriven ?? undefined,
         commuteMiles: commuteMiles ?? undefined,
         originLabel: originLabel ?? undefined,
@@ -969,6 +1016,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
       school: { include: { region: { select: { name: true } } } },
       visitedBy: { select: { name: true, email: true } },
       observedTeacher: { select: { name: true } },
+      observedSubject: { select: { name: true } },
     },
     orderBy: [{ plannedStartDateTime: "asc" }, { createdAt: "asc" }],
   });
@@ -1012,6 +1060,8 @@ export async function getVisitHistory(regionFilter?: string | null) {
     obsSkipNotes: v.obsSkipNotes,
     observedTeacherId: v.observedTeacherId,
     observedTeacherName: v.observedTeacher?.name ?? null,
+    observedSubjectId: v.observedSubjectId,
+    observedSubjectName: v.observedSubject?.name ?? null,
     hasInstrumentRequest: v.hasInstrumentRequest,
     instrumentRequestDetails: v.instrumentRequestDetails,
     geofenceOverridden: v.geofenceOverridden,
@@ -1039,6 +1089,7 @@ const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
   vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).default("PERSONAL"),
   observedTeacherId: z.string().optional(),
+  observedSubjectId: z.string().optional(),
   origin: originCoordsSchema.optional(),
   notes: z.string().max(2000).optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
@@ -1102,6 +1153,12 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
 
   const skippedObs = data.obsSkipReason != null;
 
+  // plannedStart is the route slot, but it does land on the day the RM picked,
+  // which is all the day-level fallback needs.
+  const observedSubjectId = isRemote
+    ? undefined
+    : data.observedSubjectId ?? (await observedSubjectFor(schoolId, plannedStart));
+
   const visit = await prisma.visit.create({
     data: {
       schoolId,
@@ -1115,6 +1172,7 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       mode: data.mode,
       vehicle: data.vehicle,
       observedTeacherId: isRemote ? undefined : data.observedTeacherId,
+      observedSubjectId,
       milesDriven: milesDriven ?? undefined,
       commuteMiles: commuteMiles ?? undefined,
       originLabel: originLabel ?? undefined,
@@ -1553,6 +1611,7 @@ const editVisitSchema = z.object({
   notes: z.string().max(2000).optional(),
   vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).optional(),
   observedTeacherId: z.string().nullable().optional(),
+  observedSubjectId: z.string().nullable().optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).optional(),
   principalNotes: z.string().max(2000).optional(),
   hasInstrumentRequest: z.boolean().optional(),
@@ -1607,6 +1666,7 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
       ...(data.notes !== undefined ? { reason: data.notes || "Manual logging" } : {}),
       ...(data.vehicle !== undefined ? { vehicle: data.vehicle } : {}),
       ...(data.observedTeacherId !== undefined ? { observedTeacherId: data.observedTeacherId } : {}),
+      ...(data.observedSubjectId !== undefined ? { observedSubjectId: data.observedSubjectId } : {}),
       ...(data.visitedWith !== undefined ? { visitedWith: data.visitedWith } : {}),
       ...(data.principalNotes !== undefined ? { principalNotes: data.principalNotes || null } : {}),
       ...(data.hasInstrumentRequest !== undefined
@@ -2450,4 +2510,33 @@ export async function setMyHomeLocation(address: string) {
     data: { homeAddress: trimmed, homeLat: lat, homeLng: lng },
   });
   return { address: trimmed, lat, lng };
+}
+
+/**
+ * Rewrite the export spreadsheet now, instead of waiting for tonight's cron.
+ *
+ * The cron runs once a day, which is the right cadence for a dataset nobody
+ * watches live and the wrong one the moment somebody is looking. Whoever asked
+ * "why isn't this visit in the sheet" has, up to now, had no answer but "wait
+ * until tomorrow" — so here is the button that answers it.
+ *
+ * Oversight and app admins only. Not because a refresh is dangerous — it
+ * rewrites an export from the database and cannot change the app — but because
+ * it is one request per tab against a 60-per-minute write quota, and the people
+ * who read the sheet are the people who need it fresh. An RM confirming a visit
+ * does not need to repaint eleven tabs to do so.
+ */
+export async function syncExportSheet() {
+  const session = await auth();
+  const user = requireUser(session);
+  if (!OVERSIGHT_ROLES.includes(user.role) && !canAdministerApp(user)) {
+    throw new Error("Forbidden: this role cannot refresh the export");
+  }
+
+  const result = await syncDatasetToSheet(prisma);
+  return {
+    syncedAt: new Date().toISOString(),
+    url: `https://docs.google.com/spreadsheets/d/${result.sheetId}/edit`,
+    tables: result.tables,
+  };
 }

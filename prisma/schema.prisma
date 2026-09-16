@@ -180,6 +180,7 @@ model Subject {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   classSessions ClassSession[]
+  observedVisits Visit[]
 }
 
 model ClassSession {
@@ -262,6 +263,17 @@ model Visit {
   /// visit was booked against; null for anything logged before it was captured.
   observedTeacherId             String?
   observedTeacher               Teacher?            @relation(fields: [observedTeacherId], references: [id], onDelete: SetNull)
+  /// Which programme was in the room — "Beginning Band", "Modern Band". Same
+  /// source as observedTeacherId: the class slot the visit was booked against.
+  ///
+  /// Subject and not ClassSession, though the slot is what is actually known.
+  /// ClassSession rows are disposable — the calendar sync deletes cancelled
+  /// events and scripts/prune-past-class-sessions.ts drops last year wholesale,
+  /// both on the stated assumption that nothing references them. A visit that
+  /// outlives its slot must still say which programme it watched, and Subject
+  /// is the stable catalogue: unique by name, only ever created.
+  observedSubjectId             String?
+  observedSubject               Subject?            @relation(fields: [observedSubjectId], references: [id], onDelete: SetNull)
   visitedWith                   VisitedWithOption[]
   principalNotes                String?
   hasInstrumentRequest          Boolean             @default(false)
@@ -293,6 +305,7 @@ model Visit {
   @@index([visitedById])
   @@index([vehicle])
   @@index([observedTeacherId])
+  @@index([observedSubjectId])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────

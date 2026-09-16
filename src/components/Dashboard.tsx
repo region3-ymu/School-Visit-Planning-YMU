@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getDashboardStats } from "@/app/actions";
+import { useSession } from "next-auth/react";
+import { getDashboardStats, syncExportSheet } from "@/app/actions";
+import { OVERSIGHT_ROLES } from "@/lib/permissions";
 import {
     Building2,
     CalendarX,
     ClipboardList,
     ClockAlert,
+    ExternalLink,
     Footprints,
     MapPinOff,
     Phone,
+    RefreshCw,
     Video,
 } from "lucide-react";
 
@@ -47,6 +51,69 @@ function StatCard({
     );
 }
 
+/**
+ * Refresh the export spreadsheet on demand.
+ *
+ * Shown to oversight because the sheet is theirs to read; an RM has the app
+ * itself and never needs to repaint eleven tabs. The cron still runs nightly —
+ * this exists for the afternoon when somebody wants today's visits in a pivot
+ * and the alternative is waiting until tomorrow.
+ */
+function ExportSyncCard() {
+    const [state, setState] = useState<
+        { status: "idle" | "running" } | { status: "done"; at: string; url: string } | { status: "error"; message: string }
+    >({ status: "idle" });
+
+    const run = async () => {
+        setState({ status: "running" });
+        try {
+            const r = await syncExportSheet();
+            setState({
+                status: "done",
+                // The server's clock is the honest one here: it is what actually
+                // wrote the sheet, and it is what the Sync info tab will say.
+                at: new Date(r.syncedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                url: r.url,
+            });
+        } catch (e) {
+            setState({ status: "error", message: e instanceof Error ? e.message : "Sync failed" });
+        }
+    };
+
+    return (
+        <div className="mt-8 bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl shadow-sm p-4 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                    <h3 className="font-semibold text-gray-800 dark:text-gray-100">Data export</h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                        The spreadsheet refreshes itself every evening. Refresh it now to pull in
+                        today&apos;s visits.
+                    </p>
+                </div>
+                <button
+                    onClick={run}
+                    disabled={state.status === "running"}
+                    className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-sm font-medium transition-colors"
+                >
+                    <RefreshCw size={16} className={state.status === "running" ? "animate-spin" : ""} />
+                    {state.status === "running" ? "Refreshing…" : "Refresh now"}
+                </button>
+            </div>
+            {state.status === "done" && (
+                <p className="mt-3 text-sm text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                    Refreshed at {state.at}.
+                    <a href={state.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 underline">
+                        Open the spreadsheet <ExternalLink size={13} />
+                    </a>
+                </p>
+            )}
+            {state.status === "error" && (
+                <p className="mt-3 text-sm text-red-600 dark:text-red-400">{state.message}</p>
+            )}
+        </div>
+    );
+}
+
 export default function Dashboard({ regionFilter }: { regionFilter?: string | null }) {
     const [stats, setStats] = useState({
         totalActiveSchools: 0,
@@ -62,6 +129,14 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
     useEffect(() => {
         getDashboardStats(regionFilter).then(setStats);
     }, [regionFilter]);
+
+    const { data: session } = useSession();
+    const role = session?.user?.role;
+    // The server checks this too — syncExportSheet() refuses any other role.
+    // Hiding it is about not offering a button that would fail.
+    const isOversight = Boolean(
+        (role && OVERSIGHT_ROLES.includes(role)) || session?.user?.isAppAdmin
+    );
 
     return (
         <div className="p-4 sm:p-6">
@@ -176,6 +251,8 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                     )}
                 </div>
             </div>
+
+            {isOversight && <ExportSyncCard />}
         </div>
     );
 }

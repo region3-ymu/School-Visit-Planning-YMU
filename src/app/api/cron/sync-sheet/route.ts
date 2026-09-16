@@ -3,8 +3,18 @@ import { prisma } from "@/lib/prisma";
 import { syncDatasetToSheet } from "@/lib/export/syncSheet";
 
 /**
- * Vercel Cron entry point (once daily, 30 minutes after the calendar sync so
- * the sheet reflects the day's freshly-synced classes — see vercel.json).
+ * Vercel Cron entry point (once daily at 23:00 UTC — see vercel.json).
+ *
+ * That is 7pm Miami in summer and 6pm in winter: after the last visit of the
+ * day is logged, and still after the 11:00 UTC calendar sync, so the sheet
+ * reflects the day's freshly-synced classes as it always did. It used to run
+ * at 11:30 UTC — 7:30am Miami — which meant the export never contained the
+ * day it was read on. Somebody checking at lunchtime saw an empty afternoon
+ * and reported it as visits not syncing at all.
+ *
+ * Once a day is still once a day, so syncExportSheet() in actions.ts gives
+ * oversight a refresh button for "I need it now".
+ *
  * Same auth as /api/cron/sync-calendars: Vercel sends
  * `Authorization: Bearer $CRON_SECRET` automatically when CRON_SECRET is set
  * as a project env var — verify it here since cron requests have no session.

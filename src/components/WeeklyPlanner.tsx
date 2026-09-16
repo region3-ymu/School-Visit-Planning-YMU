@@ -70,7 +70,7 @@ export default function WeeklyPlanner({
 
 
 
-    type ConfirmModalData = { schoolId: string, schoolName: string, visitDate: Date, lat?: number, lng?: number, subjectName?: string, teacherId?: string, teacherName?: string };
+    type ConfirmModalData = { schoolId: string, schoolName: string, visitDate: Date, lat?: number, lng?: number, subjectName?: string, subjectId?: string, teacherId?: string, teacherName?: string };
 
     const [confirmModalData, setConfirmModalData] = useState<ConfirmModalData | null>(null);
 
@@ -727,6 +727,7 @@ export default function WeeklyPlanner({
                                                                     lat: visit.lat,
                                                                     lng: visit.lng,
                                                                     subjectName: visit.subjectName,
+                                                                    subjectId: visit.subjectId,
                                                                     teacherId: visit.teacherId,
                                                                     teacherName: visit.teacherName,
                                                                 })}
@@ -812,6 +813,7 @@ export default function WeeklyPlanner({
                     schoolLat={confirmModalData.lat}
                     schoolLng={confirmModalData.lng}
                     subjectName={confirmModalData.subjectName}
+                    subjectId={confirmModalData.subjectId}
                     teacherId={confirmModalData.teacherId}
                     teacherName={confirmModalData.teacherName}
                     onClose={() => setConfirmModalData(null)}
