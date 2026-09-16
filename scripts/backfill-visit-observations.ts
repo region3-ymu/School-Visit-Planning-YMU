@@ -51,10 +51,12 @@
  *   - programme:  every in-person DONE visit — confirmVisit() sets it whether or
  *                 not a rubric was filled, because which programme was running
  *                 is a fact about the visit and not about the paperwork.
- *   - teacher:    only visits carrying observation content (a rating, notes, or
- *                 "visited with a YMU teacher") — confirmVisit() only sets it
- *                 alongside a rubric, and a teacher stamped on a visit that
- *                 rated nobody would invent an observation that never happened.
+ *   - teacher:    ONLY visits that ticked "YMU teacher" in who they saw — the
+ *                 app's own showTeacherObservation. An RM who went to see a
+ *                 principal or the main office observed no YMU teacher, and
+ *                 that column is meant to stay empty on their visit. Filling
+ *                 it would invent an observation that never happened, so the
+ *                 blank there is the answer, not a gap.
  *
  * Only ever fills a null. Re-running changes nothing, and it cannot overwrite
  * something a person entered by hand.
@@ -96,9 +98,6 @@ async function main() {
       id: true, schoolId: true, plannedStartDateTime: true, createdAt: true,
       geofenceDistanceM: true, geofenceOverridden: true,
       observedSubjectId: true, observedTeacherId: true, visitedWith: true,
-      obsPlanningPrep: true, obsCultureManagement: true, obsInstructionMusicianship: true,
-      obsEngagementEvidence: true, obsProfessionalismGrowth: true, obsNotes: true,
-      obsSkipReason: true,
       school: { select: { name: true } },
     },
     orderBy: { plannedStartDateTime: "asc" },
@@ -157,13 +156,20 @@ async function main() {
       else subjectOpen++;
     }
 
-    // "This visit observed somebody" — the same condition the confirm modal
-    // uses to show the rubric at all.
-    const hasObservation =
-      v.visitedWith.includes("YMU_TEACHER") || v.obsSkipReason != null || v.obsNotes != null ||
-      v.obsPlanningPrep != null || v.obsCultureManagement != null ||
-      v.obsInstructionMusicianship != null || v.obsEngagementEvidence != null ||
-      v.obsProfessionalismGrowth != null;
+    // Did this visit observe a YMU teacher at all?
+    //
+    // Exactly showTeacherObservation from ConfirmVisitModal and VisitHistory —
+    // `!isRemote && visitedWith.includes("YMU_TEACHER")`, with isRemote already
+    // handled by the IN_PERSON filter on the query. Not the looser "does it
+    // carry a rubric": plenty of an RM's visits are to a principal or a main
+    // office and observe no YMU teacher, and on those the teacher column is
+    // SUPPOSED to be empty. Filling it would invent an observation, and the
+    // emptiness is the right answer rather than a gap to close.
+    //
+    // The two rules agree on today's data — no visit carries a rubric without
+    // the box ticked, and none has a teacher without it either — so this is
+    // about which rule is written down, not which rows it reaches now.
+    const hasObservation = v.visitedWith.includes("YMU_TEACHER");
 
     if (v.observedTeacherId == null && hasObservation) {
       teacherCandidates++;
@@ -206,7 +212,7 @@ async function main() {
   console.log(`  3 confirmed during the class  ${subjectBy[3]}`);
   console.log(`  — still open (2+, no signal)  ${subjectOpen}`);
   console.log(`  — no class that day at all    ${subjectNoClass}`);
-  console.log(`\nObserved teacher, of the ${teacherCandidates} visits that observed somebody:`);
+  console.log(`\nObserved teacher, of the ${teacherCandidates} visits that saw a YMU teacher:`);
   console.log(`  1 only one that day           ${teacherBy[1]}`);
   console.log(`  2 follows from the programme  ${teacherBy[2]}`);
   console.log(`  3 confirmed during the class  ${teacherBy[3]}`);
