@@ -43,6 +43,15 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
       orderBy: { name: "asc" },
     }),
     prisma.visit.findMany({
+      // SKIPPED is not a visit. skipVisit() writes a row so the planner stops
+      // re-proposing that school that day — no RM is stamped on it, nobody
+      // went anywhere, and "Skipped by user" is the whole content. They were
+      // 94 of 238 rows here, which is a Visits tab that is 40% not visits, and
+      // every count the Academic Manager writes has to remember to exclude
+      // them. The rows stay in the database; they are just not this tab's
+      // subject. Worth its own tab the day somebody asks what gets skipped and
+      // how often — that question needs a person attached to the skip first.
+      where: { status: { not: "SKIPPED" } },
       select: {
         id: true, plannedStartDateTime: true, status: true, reason: true, mode: true, vehicle: true,
         milesDriven: true, returnMilesDriven: true, commuteMiles: true, returnCommuteMiles: true,
@@ -120,9 +129,8 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
       title: "Visits",
       rows: [
         ["Visit ID", "Date", "Time", "School", "School ID", "Region", "Status", "Mode", "Vehicle",
-         "Visited by", "Visited by email", "Role", "Visited by region", "Miles out", "Miles back",
-         "Commute miles out",
-         "Commute miles back", "Reimbursable miles", "Origin", "Geofence metres", "Geofence overridden",
+         "Visited by", "Visited by email", "Role", "Visited by region", "Miles out",
+         "Commute miles out", "Reimbursable miles", "Origin", "Geofence metres", "Geofence overridden",
          "Visited with", "Program", "Program ID", "Observed teacher", "Observed teacher ID",
          "Planning & prep", "Culture & management",
          "Instruction & musicianship", "Engagement", "Professionalism", "Observation notes",
@@ -151,7 +159,16 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
             // different fact from where the building sits, and it is the one
             // that answers "how much did East do this month".
             v.visitedBy?.region?.code ?? "",
-            num(v.milesDriven), num(v.returnMilesDriven), num(v.commuteMiles), num(v.returnCommuteMiles),
+            // returnMilesDriven and returnCommuteMiles are NOT exported, and not
+            // because they happen to be empty. Nothing in the app writes
+            // them — five places read them, no code path sets one — so the
+            // closing leg of a day has never been captured and these two
+            // columns were structurally zero, not awaiting data. A column that
+            // can only ever be blank teaches the reader that mileage is
+            // missing. They still feed `reimbursable` above, so the day the
+            // return leg is captured the arithmetic is already right and these
+            // come back.
+            num(v.milesDriven), num(v.commuteMiles),
             reimbursable, v.originLabel ?? "",
             v.geofenceDistanceM ?? "", v.geofenceOverridden,
             v.visitedWith.join(", "),
