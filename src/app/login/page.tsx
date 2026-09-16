@@ -9,7 +9,12 @@ import { useSearchParams } from "next/navigation";
 const OAUTH_ERRORS: Record<string, string> = {
   OAuthAccountNotLinked:
     "That Google account isn't linked to your user yet. Sign in with your email and password once, or ask an admin to link it.",
-  AccessDenied: "That account isn't allowed. Sign in with an @ymu.org account.",
+  // Two different causes, and the person on the login screen cannot tell them
+  // apart: the address is outside both org domains, or it is inside one but
+  // has no account on the roster. Auth.js collapses both into AccessDenied, so
+  // the message has to cover both and point at the one fix — ask an admin.
+  AccessDenied:
+    "That Google account can't sign in. Either it's outside the organisation, or nobody has set up an account for it yet — ask an admin to create one or link it to your existing account.",
   Configuration: "Sign-in is misconfigured on the server. Tell an admin.",
   Verification: "That sign-in link expired. Try again.",
 };
@@ -62,7 +67,14 @@ function LoginForm() {
           <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
           <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
         </svg>
-        Sign in with Google (@ymu.org)
+        {/* No domain in the label. It used to read "(@ymu.org)", which was
+            wrong for anyone whose Workspace identity is on
+            @youngmusiciansunite.org — the org's other domain — and naming only
+            one of the two told those people to pick the account that does not
+            work. Spelling out both is too long for a button, and the hint is
+            not load-bearing: auth.config.ts decides which domains are allowed
+            and the AccessDenied copy above explains a refusal. */}
+        Sign in with Google
       </button>
 
       <div className="flex items-center gap-2 text-xs text-gray-400">
