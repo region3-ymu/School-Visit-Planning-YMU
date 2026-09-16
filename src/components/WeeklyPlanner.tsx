@@ -26,7 +26,19 @@ const FREQ_BADGE: Record<string, { label: string; cls: string }> = {
 
 
 
-export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string | null }) {
+export default function WeeklyPlanner({
+    regionFilter,
+    // False for the oversight roles, who read the plan without changing it
+    // (permissions.ts, tabsForRole). The server refuses their writes either
+    // way — confirmVisit, skipVisit, addManualVisit and reorderDayVisits all
+    // throw for a role canPlanVisits() rejects — so this is not the lock. It
+    // is what stops the screen from OFFERING four buttons that would each
+    // fail, which reads as a broken app rather than as one that is not theirs.
+    canPlan = true,
+}: {
+    regionFilter?: string | null;
+    canPlan?: boolean;
+}) {
 
     const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
 
@@ -330,6 +342,18 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
         <div className="p-4 sm:p-6">
 
+            {/* Said once, at the top, rather than leaving somebody to work out
+                why the rows have no buttons. Naming the region matters: with
+                "All Regions" picked this is every manager's week at once, which
+                is not what "the plan" usually means. */}
+            {!canPlan && (
+                <p className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-gray-300">
+                    You are viewing this plan, not driving it — confirming, postponing and
+                    skipping stay with the Regional Manager whose week it is. Use the region
+                    picker to choose whose plan you are looking at.
+                </p>
+            )}
+
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 space-y-4 sm:space-y-0">
 
                 <div className="flex flex-wrap items-center gap-3">
@@ -412,6 +436,8 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
 
 
+                    {canPlan && (
+
                     <button
 
                         onClick={handleOpenAddModal}
@@ -427,6 +453,8 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
                         <span>+ Add</span>
 
                     </button>
+
+                    )}
 
                     <button
 
@@ -686,7 +714,7 @@ export default function WeeklyPlanner({ regionFilter }: { regionFilter?: string 
 
 
 
-                                                    {!visit.isCompleted && (
+                                                    {canPlan && !visit.isCompleted && (
 
                                                         <div className="flex space-x-2">
 

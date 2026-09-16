@@ -170,17 +170,29 @@ export type TabId = (typeof TAB_IDS)[number];
 /**
  * The tabs a role gets, in the order they appear.
  *
- * Oversight roles have no Weekly Planner and no Zone Map. That is YMU's own
- * call (2026-08-31): those two screens exist to decide and drive somebody's
- * week, and nobody who is not driving it should be in there. What they need
- * instead is Visit History — the report — and mileage, so those come first.
+ * Oversight roles used to have no Weekly Planner and no Zone Map (YMU
+ * 2026-08-31: those screens exist to decide and drive somebody's week, and
+ * nobody who is not driving it should be in there). YMU reversed that on
+ * 2026-09-16 — oversight is supposed to see everything the Regional Managers
+ * see, and the plan is the part of the job those two screens are the only
+ * window onto.
+ *
+ * What did NOT reverse is the reason behind the original call, so it moved
+ * rather than disappeared: canPlanVisits() still says no, the five mutating
+ * actions still refuse them, and WeeklyPlanner hides its Add/Confirm/
+ * Postpone/Skip controls for anyone it returns false for. They read the week;
+ * they do not change it.
+ *
+ * Order still puts Visit History and Reports ahead of the two new tabs: what
+ * oversight opens most is the report, and the planner is the thing they go
+ * look at.
  */
 export function tabsForRole(role: Role): TabId[] {
   if (canPlanVisits(role)) {
     return ["dashboard", "planner", "history", "profiles", "map", "reports"];
   }
   if (OVERSIGHT_ROLES.includes(role)) {
-    return ["dashboard", "history", "reports", "profiles"];
+    return ["dashboard", "history", "reports", "profiles", "planner", "map"];
   }
   // MENTOR / INTERVENTIONIST: read the schools they work with and their own
   // history. Both are stubs with no workflow of their own yet.

@@ -13,7 +13,7 @@ import VisitHistory from "@/components/VisitHistory";
 import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
 import MileageGapBanner from "@/components/MileageGapBanner";
-import { canFilterByRegion, tabsForRole } from "@/lib/permissions";
+import { canFilterByRegion, canPlanVisits, tabsForRole } from "@/lib/permissions";
 import {
   Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3, Menu, X,
 } from "lucide-react";
@@ -64,8 +64,8 @@ function HomeInner() {
 
   // Which tabs this role gets, and in what order — src/lib/permissions.ts
   // decides, so the nav and the server agree about who may do what. Oversight
-  // roles have no Weekly Planner and no Zone Map: those two screens exist to
-  // decide and drive somebody's week.
+  // roles do get the Weekly Planner and the Zone Map (YMU 2026-09-16), read
+  // only: canPlan below is what takes the editing controls away.
   const allowedTabs = role ? tabsForRole(role) : ["dashboard" as const];
   const navItems = allowedTabs.map((id) => ({ id, ...TABS[id] }));
 
@@ -217,7 +217,12 @@ function HomeInner() {
               planning their week, not the one already opening a report. */}
           <MileageGapBanner />
           {currentTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
-          {currentTab === "planner" && <WeeklyPlanner regionFilter={selectedRegionId || null} />}
+          {currentTab === "planner" && (
+            <WeeklyPlanner
+              regionFilter={selectedRegionId || null}
+              canPlan={role ? canPlanVisits(role) : false}
+            />
+          )}
           {currentTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
           {currentTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
           {currentTab === "map" && <MapZoneView />}
