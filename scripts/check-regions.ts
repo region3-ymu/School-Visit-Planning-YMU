@@ -84,8 +84,8 @@ async function main() {
     try {
       const plan = await proposeVisitsForWeek(prisma, weekStart, {
         regionId: region.id,
-        programmes: programmeScopeFor("REGIONAL_MANAGER"),
-        workWindow: workWindowFor("REGIONAL_MANAGER"),
+        programmes: programmeScopeFor({ role: "REGIONAL_MANAGER" }),
+        workWindow: workWindowFor({ role: "REGIONAL_MANAGER" }),
         maxVisitsPerWeek: 12,
         maxVisitsPerDay: 4,
       });
@@ -118,8 +118,8 @@ async function main() {
   }
 
   const afterschool = await proposeVisitsForWeek(prisma, weekStart, {
-    programmes: programmeScopeFor("AFTER_SCHOOL_MANAGER"),
-    workWindow: workWindowFor("AFTER_SCHOOL_MANAGER"),
+    programmes: programmeScopeFor({ role: "AFTER_SCHOOL_MANAGER" }),
+    workWindow: workWindowFor({ role: "AFTER_SCHOOL_MANAGER" }),
     maxVisitsPerWeek: 12,
     maxVisitsPerDay: 4,
   });

@@ -63,8 +63,16 @@ export function canPlanVisits(role: Role): boolean {
  * The parts of a user these checks need. Taking an object rather than a bare
  * role because administering the app is a flag on the person, not a job title —
  * YMU's CPO administers it and the app still has to call him the CPO.
+ *
+ * Both flags are optional so a caller that only has a role can still ask the
+ * questions that only need one. Absent reads as false, which is the closed
+ * answer in both cases.
  */
-export type Principal = { role: Role; isAppAdmin?: boolean | null };
+export type Principal = {
+  role: Role;
+  isAppAdmin?: boolean | null;
+  seesAfterschool?: boolean | null;
+};
 
 /** Administers the app: calendar sync, accounts, correcting other people's records. */
 export function canAdministerApp(user: Principal): boolean {
@@ -97,15 +105,30 @@ export function canSeeOthersReports(role: Role): boolean {
 }
 
 /**
- * Which programmes this role plans and reports on.
+ * Which programmes this person plans and reports on.
  *
  * The Afterschool Manager owns every afterschool class in every region and
  * nothing else, so their whole job is the set of classes the app was dropping.
  * Everyone else plans the school day, which is the behaviour that was hardcoded
  * in three places before this.
+ *
+ * "all" is the third answer and it is a person, not a role. North's Regional
+ * Manager is accountable for the afterschool programme at Norland, and
+ * "exclude-afterschool" hid all 52 of its sessions from his planner — he
+ * reported it as the classes simply not being there. The other Regional
+ * Managers keep the exclusion; YMU was explicit that this is one person for
+ * now, which is why it reads a flag instead of naming a region.
+ *
+ * Takes a Principal rather than a Role for exactly that reason — and note it
+ * widens, never narrows: an AFTER_SCHOOL_MANAGER with the flag set is still
+ * "only-afterschool", because that role's scope is its whole job rather than a
+ * restriction placed on it.
  */
-export function programmeScopeFor(role: Role): "exclude-afterschool" | "only-afterschool" {
-  return role === "AFTER_SCHOOL_MANAGER" ? "only-afterschool" : "exclude-afterschool";
+export function programmeScopeFor(
+  user: Principal
+): "exclude-afterschool" | "only-afterschool" | "all" {
+  if (user.role === "AFTER_SCHOOL_MANAGER") return "only-afterschool";
+  return user.seesAfterschool ? "all" : "exclude-afterschool";
 }
 
 /**
@@ -118,14 +141,26 @@ export function programmeScopeFor(role: Role): "exclude-afterschool" | "only-aft
  * empty even after the programme filter was fixed: every class it was looking
  * for was out of hours by definition, which is what "afterschool" means.
  */
-export function workWindowFor(role: Role): { start: string; end: string } | undefined {
+export function workWindowFor(
+  user: Principal
+): { start: string; end: string } | undefined {
   // 19:30, from the data rather than a guess: across YMU-A's 3,908 afterschool
   // events the latest any class ends is 18:30 (Little River), and the planner
   // only proposes a class that fits ENTIRELY inside the window — so an end of
   // 17:00 or even 18:00 silently drops the longest programmes. The margin
   // costs nothing: widening this role's day cannot pull a school-hours class
   // into their plan, because the programme filter already decided that.
-  if (role === "AFTER_SCHOOL_MANAGER") return { start: "08:00", end: "19:30" };
+  //
+  // Anyone who plans afterschool needs this window, not just the role that
+  // only plans afterschool — which is why it asks programmeScopeFor() rather
+  // than naming a role. Widening the filter without widening the day would
+  // have looked like the fix not working: Norland's programme runs 16:00-18:00
+  // Miami, and a class is only proposed when it fits ENTIRELY inside the
+  // window, so every session let through by the filter would still have been
+  // dropped as out of hours.
+  if (programmeScopeFor(user) !== "exclude-afterschool") {
+    return { start: "08:00", end: "19:30" };
+  }
   return undefined;
 }
 

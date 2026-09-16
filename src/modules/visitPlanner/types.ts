@@ -43,8 +43,10 @@ export interface ProposedVisit {
  * afterschool class is somebody else's programme, so it never counted as a
  * reason to visit. "only" is the Afterschool Manager's, who owns exactly those
  * classes across every region — for them the old filter hid the entire job.
+ * "all" is for the one Regional Manager who runs an afterschool programme in
+ * his own region as well as the school day, so neither filter describes him.
  */
-export type ProgrammeScope = "exclude-afterschool" | "only-afterschool";
+export type ProgrammeScope = "exclude-afterschool" | "only-afterschool" | "all";
 
 export interface ProposeVisitsOptions {
   regionId?: string;

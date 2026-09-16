@@ -97,6 +97,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           select: {
             role: true,
             isAppAdmin: true,
+            seesAfterschool: true,
             regionId: true,
             region: { select: { name: true } },
           },
@@ -104,6 +105,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         if (dbUser) {
           token.role = dbUser.role;
           token.isAppAdmin = dbUser.isAppAdmin;
+          token.seesAfterschool = dbUser.seesAfterschool;
           token.regionId = dbUser.regionId ?? null;
           token.regionName = dbUser.region?.name ?? null;
         }

@@ -141,6 +141,11 @@ export async function proposeVisitsForWeek(
   const regionId = options?.regionId;
   const programmes = options?.programmes ?? "exclude-afterschool";
   const onlyAfterschool = programmes === "only-afterschool";
+  // "all" takes neither branch below: it must not narrow the schools to the
+  // ones hosting afterschool (that is the "only" behaviour, and it would drop
+  // the rest of his region), and it must not drop a class for being on the
+  // wrong side of the afterschool line.
+  const everyProgramme = programmes === "all";
 
   // Normalised through Miami rather than the host's zone: date-fns startOfWeek
   // reads the same instant as a different weekday depending on where the code
@@ -243,7 +248,9 @@ export async function proposeVisitsForWeek(
     // The one line that decides whose plan this is. The classifier needs the
     // start time as well as the title: "Marching Band" is afterschool at Carol
     // City at 15:00 and a regular class at Homestead at 07:40.
-    if (isAfterschoolClass(s.subject?.name, s.startDateTime) !== onlyAfterschool) continue;
+    if (!everyProgramme && isAfterschoolClass(s.subject?.name, s.startDateTime) !== onlyAfterschool) {
+      continue;
+    }
     const key = `${s.schoolId}:${dayKeyInAppZone(s.startDateTime)}`;
     if (!sessionsBySchoolDay.has(key)) sessionsBySchoolDay.set(key, []);
     sessionsBySchoolDay.get(key)!.push(s);

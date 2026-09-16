@@ -9,7 +9,7 @@
  */
 import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
-import { ROLE_LABELS, canAdministerApp, canPlanVisits, seesAllRegions, tabsForRole } from "../src/lib/permissions";
+import { ROLE_LABELS, canAdministerApp, canPlanVisits, programmeScopeFor, seesAllRegions, tabsForRole } from "../src/lib/permissions";
 
 dotenv.config();
 const prisma = new PrismaClient();
@@ -21,6 +21,7 @@ async function main() {
       name: true,
       role: true,
       isAppAdmin: true,
+      seesAfterschool: true,
       hashedPassword: true,
       region: { select: { code: true } },
       managedRegion: { select: { code: true } },
@@ -49,6 +50,7 @@ async function main() {
     );
     console.log(`  sign in: ${signIn.length ? signIn.join(" or ") : "Google (not yet linked)"}`);
     console.log(`  tabs: ${tabsForRole(u.role).join(", ")}`);
+    console.log(`  programmes: ${programmeScopeFor(u)}`);
     console.log(`  can plan/record visits: ${canPlanVisits(u.role) ? "yes" : "no (read-only)"}`);
     console.log(`  can administer the app: ${canAdministerApp(u) ? "yes" : "no"}`);
     console.log(`  visits recorded: ${u._count.visits}`);

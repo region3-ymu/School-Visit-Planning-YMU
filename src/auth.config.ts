@@ -85,6 +85,11 @@ export default {
       session.user.id = token.sub!;
       session.user.role = token.role as import("@prisma/client").Role;
       session.user.isAppAdmin = Boolean(token.isAppAdmin);
+      // Boolean(), so a session minted before this claim existed reads false
+      // rather than undefined. The filter it drives is the restrictive one, so
+      // the worst a stale token does is leave somebody on the old behaviour
+      // until they sign in again.
+      session.user.seesAfterschool = Boolean(token.seesAfterschool);
       session.user.regionId = (token.regionId as string | null) ?? null;
       session.user.regionName = (token.regionName as string | null) ?? null;
       return session;

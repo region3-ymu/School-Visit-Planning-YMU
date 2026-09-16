@@ -343,10 +343,10 @@ export async function getWeeklyPlan(
     // else plans the school day. Before this the filter was hardcoded to
     // exclude afterschool, so that role's planner would have been empty — the
     // 23 sessions it exists to cover were the only ones being dropped.
-    programmes: programmeScopeFor(user.role),
+    programmes: programmeScopeFor(user),
     // An afterschool class is out of hours by definition, so it needs a working
     // day that reaches past 17:00 — see workWindowFor().
-    workWindow: workWindowFor(user.role),
+    workWindow: workWindowFor(user),
     maxVisitsPerWeek,
     maxVisitsPerDay,
     distanceService,
@@ -504,10 +504,13 @@ export async function getSchoolOptionsForWeek(
     include: { subject: true },
   });
   // Whose programme this viewer runs. Same rule as the planner: an RM never
-  // wants the afterschool slots, and the Afterschool Manager wants nothing else.
-  const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
+  // wants the afterschool slots, the Afterschool Manager wants nothing else,
+  // and the one RM who runs a programme of his own wants both.
+  const scope = programmeScopeFor(user);
   for (const s of sessions) {
-    if (isAfterschoolClass(s.subject?.name, s.startDateTime) !== wantAfterschool) continue;
+    if (scope !== "all" && isAfterschoolClass(s.subject?.name, s.startDateTime) !== (scope === "only-afterschool")) {
+      continue;
+    }
     addOption({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {
@@ -547,9 +550,13 @@ export async function getSchoolCalendarOptionsForWeek(
     orderBy: { startDateTime: "asc" },
   });
 
-  const wantAfterschool = programmeScopeFor(user.role) === "only-afterschool";
+  const scope = programmeScopeFor(user);
   return sessions
-    .filter((s) => isAfterschoolClass(s.subject?.name, s.startDateTime) === wantAfterschool)
+    .filter(
+      (s) =>
+        scope === "all" ||
+        isAfterschoolClass(s.subject?.name, s.startDateTime) === (scope === "only-afterschool")
+    )
     .map((s) => ({
       date: dayKeyInAppZone(s.startDateTime),
       rule: {
