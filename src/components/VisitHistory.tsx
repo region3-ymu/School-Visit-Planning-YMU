@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getSchoolTeachers,
+    getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getSchoolSubjects, getSchoolTeachers,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronLeft, ChevronRight, Route } from "lucide-react";
@@ -125,6 +125,14 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     type SchoolTeacher = Awaited<ReturnType<typeof getSchoolTeachers>>[number];
     const [schoolTeachers, setSchoolTeachers] = useState<SchoolTeacher[]>([]);
     const [observedTeacherId, setObservedTeacherId] = useState("");
+    // Which programme was in the room. Captured automatically from the class
+    // slot when the planner books a visit, but a manual entry has no slot — and
+    // neither did the 42 visits the backfill reached, nor the 46 it refused to
+    // guess at because the school ran two programmes that day. Those are the
+    // ones this asks about.
+    type SchoolSubject = Awaited<ReturnType<typeof getSchoolSubjects>>[number];
+    const [schoolSubjects, setSchoolSubjects] = useState<SchoolSubject[]>([]);
+    const [observedSubjectId, setObservedSubjectId] = useState("");
     // What the server will actually chain from for the date being logged. The
     // origin picker only matters when this comes back empty — asking anyway made
     // it look as though an earlier stop that day had been forgotten.
@@ -213,6 +221,24 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
     // Reloaded whenever the school changes; picking a different school must not
     // leave the previous school's teacher selected.
+    useEffect(() => {
+        if (!selectedSchool || !visitIso) { setSchoolSubjects([]); return; }
+        let cancelled = false;
+        getSchoolSubjects(selectedSchool, visitIso).then((list) => {
+            if (cancelled) return;
+            setSchoolSubjects(list);
+            setObservedSubjectId((prev) => {
+                if (list.some((x) => x.id === prev)) return prev;
+                // Only preselect when the day leaves no choice — the same line
+                // the backfill draws, for the same reason.
+                const taught = list.filter((x) => x.taughtOnDate);
+                if (taught.length === 1) return taught[0].id;
+                return list.length === 1 ? list[0].id : "";
+            });
+        });
+        return () => { cancelled = true; };
+    }, [selectedSchool, visitIso]);
+
     useEffect(() => {
         if (!selectedSchool || !visitIso) { setSchoolTeachers([]); return; }
         let cancelled = false;
@@ -329,6 +355,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setObsSkipReason((log.obsSkipReason as ObservationSkipReason | null) ?? null);
         setObsSkipNotes(log.obsSkipNotes ?? "");
         setObservedTeacherId(log.observedTeacherId ?? "");
+        setObservedSubjectId(log.observedSubjectId ?? "");
         setShowModal(true);
     };
 
@@ -369,6 +396,10 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsSkipReason: showTeacherObservation ? obsSkipReason : null,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() : "",
                     observedTeacherId: showTeacherObservation ? observedTeacherId || null : null,
+                    // Not gated on the rubric, unlike the teacher: which
+                    // programme was running is true whether or not anybody was
+                    // rated, which is how confirmVisit records it too.
+                    observedSubjectId: observedSubjectId || null,
                 });
             } else {
                 // Only the first in-person visit of the day needs an origin; the server
@@ -422,6 +453,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
                     observedTeacherId: showTeacherObservation ? observedTeacherId || undefined : undefined,
+                    observedSubjectId: observedSubjectId || undefined,
                 });
             }
         } catch (err) {
@@ -896,6 +928,27 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 rows={2}
                                                 className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
                                             />
+                                        </div>
+                                    )}
+
+                                    {schoolSubjects.length > 0 && (
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                                Which program?
+                                            </label>
+                                            <select
+                                                value={observedSubjectId}
+                                                onChange={(e) => setObservedSubjectId(e.target.value)}
+                                                className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm text-gray-900 dark:text-gray-100"
+                                            >
+                                                <option value="">Not recorded</option>
+                                                {schoolSubjects.map((sub) => (
+                                                    <option key={sub.id} value={sub.id}>
+                                                        {sub.name}
+                                                        {sub.taughtOnDate ? " (ran that day)" : ""}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </div>
                                     )}
 

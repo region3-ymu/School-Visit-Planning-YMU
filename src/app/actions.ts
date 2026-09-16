@@ -2170,6 +2170,55 @@ export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
     );
 }
 
+/**
+ * The programmes taught at a school, for the Log/Edit Visit form's programme
+ * picker.
+ *
+ * Shaped like getSchoolTeachers above and for the same reason: several schools
+ * alternate two programmes through the same slot, so the date is what settles
+ * which was actually running. What it cannot settle is a day that ran both —
+ * 46 historical visits sit at exactly that school-and-day, which is why this
+ * picker exists at all: the backfill refused to guess between them and a person
+ * who was there can simply say.
+ */
+export async function getSchoolSubjects(schoolId: string, onDateIso?: string) {
+  const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+  const yearStart = firstQuarter?.startDate;
+
+  let taughtThatDay = new Set<string>();
+  if (onDateIso) {
+    const dayKey = toAppZoneDayKey(onDateIso);
+    const dayStart = zonedDayStart(dayKey);
+    const dayEnd = zonedDayStart(addDaysToDayKey(dayKey, 1));
+    const onDay = await prisma.classSession.findMany({
+      where: { schoolId, startDateTime: { gte: dayStart, lt: dayEnd } },
+      select: { subjectId: true },
+    });
+    taughtThatDay = new Set(onDay.map((c) => c.subjectId));
+  }
+
+  const sessions = await prisma.classSession.findMany({
+    where: { schoolId, ...(yearStart ? { startDateTime: { gte: yearStart } } : {}) },
+    select: { subjectId: true, subject: { select: { name: true } } },
+  });
+
+  const byId = new Map<string, { id: string; name: string; classCount: number; taughtOnDate: boolean }>();
+  for (const c of sessions) {
+    const row =
+      byId.get(c.subjectId) ??
+      { id: c.subjectId, name: c.subject.name, classCount: 0, taughtOnDate: taughtThatDay.has(c.subjectId) };
+    row.classCount += 1;
+    byId.set(c.subjectId, row);
+  }
+
+  return [...byId.values()].sort(
+    (a, b) =>
+      Number(b.taughtOnDate) - Number(a.taughtOnDate) ||
+      b.classCount - a.classCount ||
+      a.name.localeCompare(b.name)
+  );
+}
+
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {
   const session = await auth();
   const user = requireUser(session);
