@@ -4,15 +4,21 @@
 
 import { useEffect, useState } from "react";
 
-import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, skipVisit } from "@/app/actions";
+import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit } from "@/app/actions";
 
 import { usePlannerStore } from "@/store/plannerStore";
 
 import { format, addDays, subDays, startOfWeek } from "date-fns";
 
+// Day keys are Miami's, not the browser's. The server plans, skips and pins by
+// Miami calendar day, and a day key built with date-fns format() is the
+// viewer's — the two agreed only by luck, and stopped agreeing for anything
+// scheduled late enough in the evening to already be tomorrow in UTC.
+import { addDaysToDayKey, dayKeyInAppZone } from "@/lib/timezone";
+
 import { RefreshCw, MapPin, Clock, CheckCircle, ChevronLeft, ChevronRight, CalendarDays, Trash2, X, AlertCircle } from "lucide-react";
 
-import { ViableOption } from "@/lib/types";
+import { ViableOption, VisitInfo } from "@/lib/types";
 
 import ConfirmVisitModal from "./ConfirmVisitModal";
 
@@ -40,13 +46,32 @@ export default function WeeklyPlanner({
     canPlan?: boolean;
 }) {
 
-    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
+    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, plannedFor, setPlan, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
 
     const weekStartDate = new Date(weekStartDateStr);
     // Sent to the server as a plain calendar date. An ISO instant would be
     // re-read in the host's zone there, and 8pm Monday in Miami is already
     // Tuesday in UTC — which selected the wrong week.
     const weekStartKey = format(startOfWeek(weekStartDate, { weekStartsOn: 1 }), "yyyy-MM-dd");
+
+    // Mon-Fri as Miami calendar days. Kept as keys rather than Date objects
+    // because that is what every comparison below is really about — which
+    // column a visit belongs in — and a Date carries a time of day that only
+    // ever gets in the way of that.
+    const weekDayKeys = Array.from({ length: 5 }, (_, i) => addDaysToDayKey(weekStartKey, i));
+    const todayKey = dayKeyInAppZone(new Date());
+
+    /** The Miami calendar day a visit falls on. */
+    const dayKeyOf = (date: Date | string) => dayKeyInAppZone(new Date(date));
+
+    // Noon local, purely so date-fns can name the weekday and the date without
+    // a midnight instant tipping over a zone boundary while it does.
+    const labelDateFor = (dayKey: string) => new Date(`${dayKey}T12:00:00`);
+
+    // What a plan on screen is a plan FOR. When this changes the plan is stale
+    // and is refetched; when it doesn't, coming back to the tab leaves the
+    // week exactly as the user left it.
+    const planKey = [weekStartKey, regionFilter ?? "own", maxVisitsPerWeek, maxVisitsPerDay].join("|");
 
     const [loading, setLoading] = useState(false);
 
@@ -76,11 +101,16 @@ export default function WeeklyPlanner({
 
 
 
-    const fetchPlan = async () => {
+    // Overrides are passed in, never read from the closure. "Recalculate"
+    // clears them and refetches in the same handler, and a zustand setter does
+    // not update a closure that has already been created — so the "cleared"
+    // recalculation was still being sent the old pins and skips, and came back
+    // with the manual changes it had just been told to forget.
+    const fetchPlan = async (overrides: Partial<VisitInfo>[]) => {
 
         setLoading(true);
-        const plan = await getWeeklyPlan(weekStartKey, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
-        setPlannedVisits(plan);
+        const plan = await getWeeklyPlan(weekStartKey, overrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
+        setPlan(plan, planKey);
         setLoading(false);
 
     };
@@ -93,7 +123,7 @@ export default function WeeklyPlanner({
 
         setPlannedVisits(plannedVisits.map(v =>
 
-            (v.schoolId === schoolId && format(new Date(v.date), 'yyyy-MM-dd') === format(visitDate, 'yyyy-MM-dd'))
+            (v.schoolId === schoolId && dayKeyOf(v.date) === dayKeyOf(visitDate))
 
                 ? { ...v, isCompleted: true }
 
@@ -117,7 +147,7 @@ export default function WeeklyPlanner({
 
         try { await skipVisit(schoolId, visitDate.toISOString()); } catch (e) { console.error(e); }
 
-        setPlannedVisits(plannedVisits.filter(v => !(v.schoolId === schoolId && format(new Date(v.date), 'yyyy-MM-dd') === format(visitDate, 'yyyy-MM-dd'))));
+        setPlannedVisits(plannedVisits.filter(v => !(v.schoolId === schoolId && dayKeyOf(v.date) === dayKeyOf(visitDate))));
 
     };
 
@@ -131,15 +161,23 @@ export default function WeeklyPlanner({
 
 
 
-    const handlePostponeToDay = (schoolId: string, originalDate: Date, targetDate: Date | null, startTime?: string, endTime?: string) => {
+    // The target is a Miami day key, not a Date: the override it becomes is
+    // read back on the server as a calendar day, and handing it a Date carrying
+    // the browser's current time of day is how a visit moved to a Thursday
+    // could be filed under the Wednesday.
+    const handlePostponeToDay = (schoolId: string, originalDate: Date, targetDayKey: string | null, startTime?: string, endTime?: string) => {
 
+        // Order matters, and the store relies on it: the skip is recorded
+        // first, and it clears any pin that was holding this school on this day
+        // — otherwise a hand-added visit that is then moved stays pinned to
+        // both days and shows up twice.
         addOverride({ schoolId, date: originalDate, isSkipped: true });
 
 
 
         const updatedVisits = [...plannedVisits];
 
-        const oldIndex = updatedVisits.findIndex(v => v.schoolId === schoolId && format(new Date(v.date), 'yyyy-MM-dd') === format(originalDate, 'yyyy-MM-dd'));
+        const oldIndex = updatedVisits.findIndex(v => v.schoolId === schoolId && dayKeyOf(v.date) === dayKeyOf(originalDate));
 
         let movingVisit = null;
 
@@ -153,7 +191,11 @@ export default function WeeklyPlanner({
 
 
 
-        if (targetDate) {
+        if (targetDayKey) {
+
+            // Midday UTC is inside the Miami day whatever the offset, so the
+            // server reads back the day that was clicked.
+            const targetDate = new Date(`${targetDayKey}T12:00:00Z`);
 
             addOverride({ schoolId, date: targetDate, isPinned: true, startTime, endTime });
 
@@ -253,13 +295,20 @@ export default function WeeklyPlanner({
 
         if (!selectedSchoolIdForAdd) return;
 
+        const schoolId = selectedSchoolIdForAdd;
+
+        const dayKey = String(rule.date).slice(0, 10);
 
 
-        const newOverride = {
 
-            schoolId: selectedSchoolIdForAdd,
+        addOverride({
 
-            date: new Date(rule.date + "T12:00:00Z"),
+            schoolId,
+
+            // Midday UTC: inside the Miami day whatever the offset, so the
+            // server reads back the day that was clicked.
+
+            date: new Date(dayKey + "T12:00:00Z"),
 
             isPinned: true,
 
@@ -267,9 +316,7 @@ export default function WeeklyPlanner({
 
             endTime: rule.rule.end
 
-        };
-
-        addOverride(newOverride);
+        });
 
 
 
@@ -281,15 +328,52 @@ export default function WeeklyPlanner({
 
 
 
+        // One card, inserted. NOT a recalculation of the week: re-planning
+        // after every addition is what made adding one school shuffle the four
+        // already on the board, because the optimiser starts from scratch and
+        // any change to its inputs re-clusters the days. The week the user has
+        // accepted stays as it is; "Recalculate" is there when they do want it
+        // rebuilt.
+
         setLoading(true);
 
-        const updatedOverrides = [...manualOverrides, newOverride];
+        let card: VisitInfo | null = null;
 
-        const plan = await getWeeklyPlan(weekStartKey, updatedOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
+        try {
 
-        setPlannedVisits(plan);
+            card = await getManualVisit(schoolId, dayKey, rule.rule.start, rule.rule.end);
+
+        } catch (e) {
+
+            console.error(e);
+
+        }
 
         setLoading(false);
+
+        if (!card) return;
+
+
+
+        // This school is placed now, so its own auto-proposal elsewhere in the
+        // week goes — the same eviction the server would do on the next
+        // recalculation. A completed visit or another hand-placed slot at the
+        // same school stays: Horace Mann's two Music Production classes are two
+        // visits, not one.
+
+        const isSameSlot = (v: VisitInfo) =>
+
+            v.schoolId === card!.schoolId && dayKeyOf(v.date) === dayKeyOf(card!.date) && v.startTime === card!.startTime;
+
+
+
+        setPlannedVisits([
+
+            ...plannedVisits.filter(v => !isSameSlot(v) && (v.schoolId !== card!.schoolId || v.isCompleted || v.isPinned)),
+
+            card,
+
+        ]);
 
     };
 
@@ -301,14 +385,18 @@ export default function WeeklyPlanner({
 
         const load = async () => {
 
-            // Only auto-load if we don't already have a plan for this week.
-            // Recalculate should be manual (button) to avoid wiping user adjustments when returning to tab.
-            const currentWeekStr = format(startOfWeek(weekStartDate, { weekStartsOn: 1 }), "yyyy-MM-dd");
-            const hasPlanForThisWeek = plannedVisits.some(v =>
-                format(startOfWeek(new Date(v.date), { weekStartsOn: 1 }), "yyyy-MM-dd") === currentWeekStr
-            );
-
-            if (hasPlanForThisWeek) return;
+            // A plan already computed for this exact question is kept, so
+            // coming back to the tab leaves the week as the user left it and
+            // their adjustments survive.
+            //
+            // The question is the whole key, not just the week: it used to be
+            // "do we have any visit in this week?", which was true for a plan
+            // built for a different region or a different target, so changing
+            // the region picker or "Target visits" left the old plan sitting on
+            // screen doing nothing. The only control that visibly did anything
+            // was Recalculate — which is also the one that throws away every
+            // manual change, so that became the habit.
+            if (plannedFor === planKey && plannedVisits.length > 0) return;
 
             setLoading(true);
 
@@ -316,7 +404,7 @@ export default function WeeklyPlanner({
 
             if (isMounted) {
 
-                setPlannedVisits(plan);
+                setPlan(plan, planKey);
 
                 setLoading(false);
 
@@ -328,13 +416,18 @@ export default function WeeklyPlanner({
 
         return () => { isMounted = false; };
 
+        // planKey IS the dependency list: week, region and both caps, joined.
+        // The rest of what this closure reads — the overrides, the setters — is
+        // deliberately not a trigger. Refetching when an override changes is
+        // exactly the behaviour being fixed here; each handler decides for
+        // itself whether its edit needs the server.
         // eslint-disable-next-line react-hooks/exhaustive-deps
-
-    }, [weekStartDateStr, regionFilter, maxVisitsPerWeek, maxVisitsPerDay]);
-
+    }, [planKey]);
 
 
-    const days = Array.from({ length: 5 }).map((_, i) => addDays(startOfWeek(weekStartDate, { weekStartsOn: 1 }), i));
+
+    // Mon-Fri as Miami day keys — see weekDayKeys.
+    const days = weekDayKeys;
 
 
 
@@ -460,9 +553,20 @@ export default function WeeklyPlanner({
 
                         onClick={() => {
 
+                            // Asked, because this is the one control that throws
+                            // work away: everything added, moved or deleted by
+                            // hand this week goes. The caps and the region
+                            // picker recalculate on their own now, so nobody has
+                            // to come through here to get a fresh plan.
+                            if (manualOverrides.length > 0 && !confirm("Recalculate from scratch? Everything you have added, moved or deleted by hand this week will be discarded.")) return;
+
                             clearOverrides();
 
-                            fetchPlan();
+                            // Explicitly empty. clearOverrides() cannot be seen
+                            // by a closure that already exists, so reading them
+                            // back here sent the very pins and skips this button
+                            // is meant to discard.
+                            fetchPlan([]);
 
                         }}
 
@@ -488,9 +592,9 @@ export default function WeeklyPlanner({
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-                {days.map((day, idx) => {
+                {days.map((formattedDate, idx) => {
 
-                    const formattedDate = format(day, "yyyy-MM-dd");
+                    const day = labelDateFor(formattedDate);
 
                     const toMins = (t?: string) => {
                         if (!t || t === "Done") return 999999;
@@ -499,7 +603,7 @@ export default function WeeklyPlanner({
                     };
 
                     const dayVisits = plannedVisits
-                        .filter(v => format(new Date(v.date), "yyyy-MM-dd") === formattedDate)
+                        .filter(v => dayKeyOf(v.date) === formattedDate)
                         .slice()
                         .sort((a, b) => toMins(a.startTime) - toMins(b.startTime));
 
@@ -862,9 +966,9 @@ export default function WeeklyPlanner({
 
                                 <div className="space-y-3">
 
-                                    {days.filter(d => format(d, "yyyy-MM-dd") >= format(new Date(), "yyyy-MM-dd") && format(d, "yyyy-MM-dd") !== format(postponeModalData.visitDate, "yyyy-MM-dd")).map((day, idx) => {
+                                    {days.filter(d => d >= todayKey && d !== dayKeyOf(postponeModalData.visitDate)).map((dateStr, idx) => {
 
-                                        const dateStr = format(day, "yyyy-MM-dd");
+                                        const day = labelDateFor(dateStr);
                                         const norm = (s: string) => (s && String(s).slice(0, 10)) || "";
                                         const optionsForDay = postponeModalData.viableOptions.filter(o => norm(o.date) === dateStr);
 
@@ -904,7 +1008,7 @@ export default function WeeklyPlanner({
 
                                                                 key={`${dateStr}-${opt.rule.start}-${opt.rule.end}-${oIdx}`}
 
-                                                                onClick={() => handlePostponeToDay(postponeModalData.schoolId, postponeModalData.visitDate, day, opt.rule.start, opt.rule.end)}
+                                                                onClick={() => handlePostponeToDay(postponeModalData.schoolId, postponeModalData.visitDate, dateStr, opt.rule.start, opt.rule.end)}
 
                                                                 className="px-3 py-2 text-sm border rounded-lg hover:bg-indigo-50 hover:border-indigo-200 dark:hover:bg-indigo-900/30 dark:hover:border-indigo-800 transition-colors text-left flex flex-col gap-0.5 border-gray-200 dark:border-zinc-700 font-medium"
 
@@ -928,7 +1032,7 @@ export default function WeeklyPlanner({
 
                                     })}
 
-                                    {days.filter(d => format(d, "yyyy-MM-dd") >= format(new Date(), "yyyy-MM-dd") && format(d, "yyyy-MM-dd") !== format(postponeModalData.visitDate, "yyyy-MM-dd")).length === 0 && (
+                                    {days.filter(d => d >= todayKey && d !== dayKeyOf(postponeModalData.visitDate)).length === 0 && (
 
                                         <div className="text-xs italic text-gray-400 text-center py-4 border rounded-lg border-dashed">
 
@@ -1044,11 +1148,11 @@ export default function WeeklyPlanner({
 
                                             {optionsForAdd.filter(opt => {
                                                 const d = (opt.date && String(opt.date).slice(0, 10)) || opt.date;
-                                                return format(new Date(d + "T12:00:00Z"), 'yyyy-MM-dd') >= format(new Date(), 'yyyy-MM-dd');
+                                                return d >= todayKey;
                                             }).map((opt, i) => {
 
                                                 const optDateStr = (opt.date && String(opt.date).slice(0, 10)) || opt.date;
-                                                const optDate = new Date(optDateStr + "T12:00:00Z");
+                                                const optDate = labelDateFor(optDateStr);
 
                                                 return (
 
@@ -1090,7 +1194,7 @@ export default function WeeklyPlanner({
 
                                             {optionsForAdd.filter(opt => {
                                                 const d = (opt.date && String(opt.date).slice(0, 10)) || opt.date;
-                                                return format(new Date(d + "T12:00:00Z"), 'yyyy-MM-dd') >= format(new Date(), 'yyyy-MM-dd');
+                                                return d >= todayKey;
                                             }).length === 0 && (
 
                                                 <div className="text-sm text-gray-400 italic py-2">No future available slots in this week.</div>
@@ -1115,9 +1219,11 @@ export default function WeeklyPlanner({
 
                                             <div className="grid grid-cols-5 gap-1.5">
 
-                                                {Array.from({ length: 5 }, (_, i) => addDays(startOfWeek(weekStartDate, { weekStartsOn: 1 }), i)).map((day, i) => {
+                                                {days.map((dayKey, i) => {
 
-                                                    const isFuture = format(day, "yyyy-MM-dd") >= format(new Date(), "yyyy-MM-dd");
+                                                    const day = labelDateFor(dayKey);
+
+                                                    const isFuture = dayKey >= todayKey;
 
                                                     return (
 
@@ -1127,7 +1233,7 @@ export default function WeeklyPlanner({
 
                                                             disabled={!isFuture}
 
-                                                            onClick={() => handleAddVisitConfirm({ date: format(day, "yyyy-MM-dd"), rule: { start: "09:00", end: "10:00" } })}
+                                                            onClick={() => handleAddVisitConfirm({ date: dayKey, rule: { start: "09:00", end: "10:00" } })}
 
                                                             className="p-2 text-xs rounded-lg border border-gray-200 dark:border-zinc-700 hover:border-red-400 hover:bg-red-50 dark:hover:bg-red-950/20 dark:hover:border-red-800 transition-colors text-center disabled:opacity-30 disabled:cursor-not-allowed font-medium text-gray-700 dark:text-gray-300"
 

@@ -9,6 +9,7 @@
     "lint": "eslint",
     "icons": "node scripts/generate-icons.mjs",
     "check:order": "npx tsx scripts/check-visit-order.ts",
+    "check:overrides": "npx tsx scripts/check-planner-overrides.ts",
     "check:regions": "npx tsx scripts/check-regions.ts",
     "check:timezones": "npx tsx scripts/check-calendar-timezones.ts",
     "sync:sheet": "npx tsx scripts/sync-sheet.ts",

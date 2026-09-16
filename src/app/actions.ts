@@ -4,7 +4,9 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { requireUser, schoolRegionWhere, scopeToRegion } from "@/lib/auth-helpers";
 import { VisitInfo } from "@/lib/types";
-import { format, addDays } from "date-fns";
+// No `format` here on purpose: it renders in the host's zone, and on Vercel
+// that is UTC. Day keys and clock times go through @/lib/timezone instead.
+import { addDays } from "date-fns";
 import { proposeVisitsForWeek } from "@/modules/visitPlanner";
 import { proposedVisitToVisitInfo } from "@/lib/visitPlannerAdapter";
 import { OpenRouteDistanceService } from "@/modules/visitPlanner";
@@ -41,6 +43,12 @@ import {
   toAppZoneDayKey,
   zonedDayStart,
 } from "@/lib/timezone";
+import {
+  hasPinOnDay,
+  resolveOverrides,
+  splitDayScope,
+  type Pin,
+} from "@/lib/plannerOverrides";
 import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
@@ -316,6 +324,104 @@ export async function getSchoolLocation(schoolId: string) {
   return { lat: school.lat, lng: school.lng };
 }
 
+/**
+ * Turns pins into finished plan rows.
+ *
+ * Shared by getWeeklyPlan and getManualVisit so that a visit added by hand is
+ * the same card either way — carrying the school's coordinates (without them
+ * the confirm screen has no geofence target), and the programme and teacher
+ * from the class it was booked against, rather than arriving as a bare row
+ * reading "Pinned manually" with no subject and nobody to rate.
+ */
+async function buildPinnedVisits(pins: Pin[], weekKey: string): Promise<VisitInfo[]> {
+  if (pins.length === 0) return [];
+
+  const weekStart = zonedDayStart(weekKey);
+  const schoolIds = [...new Set(pins.map((p) => p.schoolId))];
+  const [schools, sessions, rules] = await Promise.all([
+    prisma.school.findMany({ where: { id: { in: schoolIds } } }),
+    prisma.classSession.findMany({
+      where: {
+        schoolId: { in: schoolIds },
+        startDateTime: { gte: weekStart },
+        endDateTime: { lt: zonedDayStart(addDaysToDayKey(weekKey, 5)) },
+      },
+      include: { subject: true, teacher: true },
+    }),
+    prisma.visitRule.findMany({
+      where: { schoolId: { in: schoolIds } },
+      orderBy: { createdAt: "desc" },
+    }),
+  ]);
+
+  const schoolById = new Map(schools.map((s) => [s.id, s]));
+  const ruleBySchool = activeRulesBySchool(rules);
+  // Matched on the class's own start time, which is exactly what both the "Add"
+  // and the "Postpone" pickers hand back as the pin's startTime.
+  const sessionByKey = new Map(
+    sessions.map((s) => [
+      `${s.schoolId}:${dayKeyInAppZone(s.startDateTime)}:${formatTimeInAppZone(s.startDateTime)}`,
+      s,
+    ])
+  );
+
+  const rows: VisitInfo[] = [];
+  for (const pin of pins) {
+    const school = schoolById.get(pin.schoolId);
+    if (!school) continue;
+
+    const classSession = sessionByKey.get(`${pin.schoolId}:${pin.dayKey}:${pin.startTime}`);
+    const rule = ruleBySchool.get(pin.schoolId);
+
+    rows.push({
+      schoolId: school.id,
+      schoolName: school.name,
+      zipCode: school.zipCode,
+      lat: school.lat ?? undefined,
+      lng: school.lng ?? undefined,
+      // The class's own instant where there is one, so the card lands in the
+      // right day column and the confirmation files it under the right day.
+      // The override itself only ever carried a nominal midday timestamp.
+      date: classSession?.startDateTime ?? instantInAppZone(pin.dayKey, pin.startTime),
+      score: 1000,
+      reason: "Added by hand",
+      startTime: pin.startTime,
+      endTime: pin.endTime,
+      classStartTime: classSession ? formatTimeInAppZone(classSession.startDateTime) : undefined,
+      classEndTime: classSession ? formatTimeInAppZone(classSession.endDateTime) : undefined,
+      subjectName: classSession?.subject?.name,
+      subjectId: classSession?.subject?.id,
+      // Only a teacher imported from YMU-A; a leftover calendar row is a school
+      // name, not a person to attribute a rating to.
+      teacherId: classSession?.teacher?.externalId ? classSession.teacher.id : undefined,
+      teacherName: classSession?.teacher?.externalId ? classSession.teacher.name : undefined,
+      // No class at that hour means this is the admin / catch-up visit the Add
+      // dialog offers when a school teaches nothing this week — worth saying on
+      // the card rather than leaving it looking like a normal observation.
+      noClassWarning: !classSession,
+      visitRuleFrequency: rule ? rule.frequencyType : "DEFAULT",
+      visitRuleNote: rule?.reason ?? undefined,
+      isPinned: true,
+      isCompleted: false,
+      viableOptionsThisWeek: [],
+    });
+  }
+  return rows;
+}
+
+/**
+ * The instant a wall-clock "HH:mm" falls at on a Miami calendar day.
+ *
+ * Used for a hand-placed visit that has no class session to borrow an instant
+ * from. Building it with `new Date(`${dayKey}T${time}`)` would read the host's
+ * zone, which on Vercel put a 09:00 admin visit at 05:00 Miami — the same bug
+ * the planner's own no-class slot had.
+ */
+function instantInAppZone(dayKey: string, time: string): Date {
+  const [h, m] = time.split(":").map(Number);
+  return new Date(zonedDayStart(dayKey).getTime() + ((h ?? 0) * 60 + (m ?? 0)) * 60_000);
+}
+
 export async function getWeeklyPlan(
   weekStartDateIso: string,
   manualOverrides: Partial<VisitInfo>[] = [],
@@ -335,7 +441,53 @@ export async function getWeeklyPlan(
   // Accepts either a "yyyy-MM-dd" week key or, from an older client, a full
   // ISO instant — both resolved to a Miami calendar day before picking the week,
   // so the host's zone never decides which Monday was meant.
-  const weekStart = zonedDayStart(mondayOfDayKey(toAppZoneDayKey(weekStartDateIso)));
+  const weekKey = mondayOfDayKey(toAppZoneDayKey(weekStartDateIso));
+  const weekStart = zonedDayStart(weekKey);
+  const weekDayKeys = Array.from({ length: 5 }, (_, i) => addDaysToDayKey(weekKey, i));
+  const weekDayKeySet = new Set(weekDayKeys);
+
+  // ---------------------------------------------------------------------------
+  // The user's manual decisions, resolved BEFORE the plan is built.
+  //
+  // These used to be applied to the finished plan: propose a whole week, then
+  // filter the skips out of it and staple the pins on. That is the root of
+  // "every time I add something by hand it reshuffles everything". A skipped
+  // stop had already taken its turn in the clustering and spent a slot of the
+  // weekly budget, so deleting a visit shrank the week; a pinned stop was
+  // invisible to the optimiser, which then evicted whatever it had proposed
+  // for that school somewhere else and re-clustered the rest of the week
+  // around the hole. Both are now inputs to proposeVisitsForWeek.
+  //
+  // How a contradictory pair of overrides is read lives in
+  // @/lib/plannerOverrides, shared with the store so the screen and the server
+  // agree about what the user has decided.
+  // ---------------------------------------------------------------------------
+
+  const { pins, skippedDays } = resolveOverrides(manualOverrides, weekDayKeySet);
+
+  // Skips recorded in the database on earlier visits to this screen. Scoped to
+  // the region like the completed-visit overlay below: a school is one region's
+  // to cover, and another manager skipping it is not this manager's decision.
+  const skippedInDb = await prisma.visit.findMany({
+    where: {
+      status: "SKIPPED",
+      plannedStartDateTime: { gte: weekStart, lt: addDays(weekStart, 5) },
+      ...(regionId ? { school: { regionId } } : {}),
+    },
+    select: { schoolId: true, plannedStartDateTime: true },
+  });
+  for (const skip of skippedInDb) {
+    const dayScope = `${skip.schoolId}:${dayKeyInAppZone(skip.plannedStartDateTime)}`;
+    // Unless it has since been pinned back onto that day. The skip row stays in
+    // the database once written, so without this a school could never be put
+    // back on a day it had once been taken off.
+    if (!hasPinOnDay(pins, dayScope)) skippedDays.add(dayScope);
+  }
+
+  // Built before the plan, because the optimiser needs their coordinates and
+  // their windows to route each day around them.
+  const pinnedRows = await buildPinnedVisits(pins, weekKey);
+  const pinnedCoords = new Map(pinnedRows.map((r) => [r.schoolId, { lat: r.lat, lng: r.lng }]));
 
   const distanceService =
     process.env.OPENROUTE_SERVICE_API_KEY ? new OpenRouteDistanceService() : undefined;
@@ -353,65 +505,25 @@ export async function getWeeklyPlan(
     maxVisitsPerWeek,
     maxVisitsPerDay,
     distanceService,
+    // What the user has already decided. Given to the planner rather than
+    // applied to its output — see the block above.
+    pinned: pins.map((pin) => ({
+      schoolId: pin.schoolId,
+      dayKey: pin.dayKey,
+      startTime: pin.startTime,
+      endTime: pin.endTime,
+      lat: pinnedCoords.get(pin.schoolId)?.lat ?? null,
+      lng: pinnedCoords.get(pin.schoolId)?.lng ?? null,
+    })),
+    skipped: [...skippedDays].map(splitDayScope),
   });
 
-  let plan: VisitInfo[] = proposed.map(proposedVisitToVisitInfo);
+  const plan: VisitInfo[] = proposed.map(proposedVisitToVisitInfo);
 
-  // Apply skips from DB and manual overrides
-  const skippedInDb = await prisma.visit.findMany({
-    where: {
-      status: "SKIPPED",
-      plannedStartDateTime: { gte: weekStart, lt: addDays(weekStart, 5) },
-    },
-    select: { schoolId: true, plannedStartDateTime: true },
-  });
-  const skipSet = new Set(
-    skippedInDb.map((s) => `${s.schoolId}:${format(s.plannedStartDateTime, "yyyy-MM-dd")}`)
-  );
-  for (const o of manualOverrides) {
-    if (o.isSkipped && o.schoolId && o.date) {
-      skipSet.add(`${o.schoolId}:${format(new Date(o.date), "yyyy-MM-dd")}`);
-    }
-  }
-  plan = plan.filter((v) => !skipSet.has(`${v.schoolId}:${format(v.date, "yyyy-MM-dd")}`));
-
-  // Apply pinned overrides
-  for (const o of manualOverrides) {
-    if (o.isPinned && o.schoolId && o.date) {
-      // Time is part of the identity here, not just school + day: Horace Mann
-      // runs Music Production twice on a B day, and a second pin for the same
-      // school that day is a second visit, not a re-pin of the first.
-      const dateKey = format(new Date(o.date), "yyyy-MM-dd");
-      const key = `${o.schoolId}:${dateKey}:${o.startTime ?? "09:00"}`;
-      if (plan.some((v) => `${v.schoolId}:${format(v.date, "yyyy-MM-dd")}:${v.startTime}` === key)) continue;
-      const school = await prisma.school.findUnique({ where: { id: o.schoolId } });
-      if (school) {
-        // Drop only this school's un-pinned auto-proposal — a pin already
-        // placed for a different time slot at the same school (that other
-        // Horace Mann class) must survive, not get evicted by whichever pin
-        // happens to be processed last.
-        plan = plan.filter((v) => v.schoolId !== o.schoolId || v.isCompleted || v.isPinned);
-        plan.push({
-          schoolId: school.id,
-          schoolName: school.name,
-          zipCode: school.zipCode,
-          // The whole school row is in hand here; dropping its coordinates is
-          // what made a pinned visit open the confirm modal with no geofence
-          // target and claim the school had no saved location.
-          lat: school.lat ?? undefined,
-          lng: school.lng ?? undefined,
-          date: new Date(o.date),
-          score: 1000,
-          reason: "Pinned manually",
-          startTime: o.startTime ?? "09:00",
-          endTime: o.endTime ?? "10:00",
-          isPinned: true,
-          isCompleted: false,
-          viableOptionsThisWeek: [],
-        });
-      }
-    }
-  }
+  // No filtering or eviction is needed here any more: the planner was told
+  // about these, so it has already left their schools out of its own picks and
+  // built each day's route around them.
+  plan.push(...pinnedRows);
 
   // Overlay completed visits from DB
   const visitsDoneWeek = await prisma.visit.findMany({
@@ -422,13 +534,28 @@ export async function getWeeklyPlan(
     },
     include: { school: true },
   });
+  // Which plan rows a completed visit has already claimed. Matching on school
+  // and day alone collapsed two visits to the same school on the same day onto
+  // one row — Horace Mann's two Music Production classes — so confirming both
+  // made one of them vanish from the week.
+  const claimedByDone = new Set<number>();
   for (const v of visitsDoneWeek) {
     const d = v.plannedStartDateTime;
-    const idx = plan.findIndex(
-      (p) =>
-        p.schoolId === v.schoolId &&
-        format(p.date, "yyyy-MM-dd") === format(d, "yyyy-MM-dd")
+    const sameSchoolAndDay = (p: VisitInfo) =>
+      p.schoolId === v.schoolId && dayKeyInAppZone(p.date) === dayKeyInAppZone(d);
+    // Prefer the row for this very slot; fall back to any unclaimed row for the
+    // school that day, which is what a confirmation off a proposed card looks
+    // like once the server has re-stamped it with the day's next route slot.
+    let idx = plan.findIndex(
+      (p, i) =>
+        !claimedByDone.has(i) &&
+        sameSchoolAndDay(p) &&
+        p.startTime === formatTimeInAppZone(d)
     );
+    if (idx < 0) {
+      idx = plan.findIndex((p, i) => !claimedByDone.has(i) && sameSchoolAndDay(p));
+    }
+    if (idx >= 0) claimedByDone.add(idx);
     const completed: VisitInfo = {
       schoolId: v.schoolId,
       schoolName: v.school.name,
@@ -473,6 +600,52 @@ export async function getWeeklyPlan(
   });
 
   return plan;
+}
+
+/**
+ * One hand-placed visit, as a finished plan row, without touching the rest of
+ * the week.
+ *
+ * The Add dialog used to recalculate the whole week after every addition, and
+ * that is why adding one school could move four others: the optimiser reruns
+ * from scratch, and any change to its inputs re-clusters the days. Placing a
+ * visit is not a reason to re-plan the week the user has already accepted — so
+ * the planner asks for the one card and inserts it.
+ */
+export async function getManualVisit(
+  schoolId: string,
+  dayKey: string,
+  startTime: string,
+  endTime: string
+): Promise<VisitInfo | null> {
+  const session = await auth();
+  const user = requireUser(session);
+  // Same rule as every other write on this screen: an oversight role reads the
+  // plan and does not change it.
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role cannot change visits");
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) throw new Error("dayKey must be yyyy-MM-dd");
+  if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) {
+    throw new Error("startTime and endTime must be HH:mm");
+  }
+
+  // Scoped like getSchools, so this cannot be used to place a visit on a school
+  // outside the caller's own region.
+  const school = await prisma.school.findFirst({
+    where: { id: schoolId, active: true, isOffice: false, ...schoolRegionWhere(user) },
+    select: { id: true },
+  });
+  if (!school) return null;
+
+  const weekKey = mondayOfDayKey(dayKey);
+  const [row] = await buildPinnedVisits([{ schoolId, dayKey, startTime, endTime }], weekKey);
+  if (!row) return null;
+
+  row.viableOptionsThisWeek = await getSchoolCalendarOptionsForWeek(
+    schoolId,
+    zonedDayStart(weekKey).toISOString()
+  );
+  return row;
 }
 
 export async function getSchoolOptionsForWeek(

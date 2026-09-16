@@ -47,7 +47,7 @@ import {
 import type { LatLng } from "./distance/types";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { haversineMeters } from "@/lib/geo";
-import type { ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
+import type { PinnedStop, ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
 import { getDefaultWorkWindow, getFrequencyDays } from "./types";
 import { activeRulesBySchool, lastContactBySchool } from "@/lib/cadence";
 import { isAfterschoolClass } from "@/lib/afterschool";
@@ -139,6 +139,13 @@ export async function proposeVisitsForWeek(
   const maxVisitsPerDay = options?.maxVisitsPerDay ?? DEFAULT_MAX_VISITS_PER_DAY;
   const distanceService = options?.distanceService;
   const regionId = options?.regionId;
+  // The user's own decisions. Both are applied while candidates are built —
+  // see PinnedStop / SkippedStop. Applying them to the finished plan instead
+  // is what made every manual edit reshuffle the rest of the week: the
+  // optimiser kept spending its budget on stops that were then filtered out,
+  // and kept clustering days as if the pinned stop were not going to be there.
+  const pinned = options?.pinned ?? [];
+  const skipped = options?.skipped ?? [];
   const programmes = options?.programmes ?? "exclude-afterschool";
   const onlyAfterschool = programmes === "only-afterschool";
   // "all" takes neither branch below: it must not narrow the schools to the
@@ -260,6 +267,17 @@ export async function proposeVisitsForWeek(
   // days count as already past.
   const today = zonedDayStart(dayKeyInAppZone(new Date()));
 
+  // Keyed on the Miami day, the same way every other day key in this file is
+  // built, so a 20:00 afterschool class — already tomorrow in UTC — is filed
+  // under the day the user saw it on.
+  const skippedKeys = new Set(skipped.map((s) => `${s.schoolId}:${s.dayKey}`));
+  const pinnedSchoolIds = new Set(pinned.map((p) => p.schoolId));
+  const pinnedByDay = new Map<string, PinnedStop[]>();
+  for (const pin of pinned) {
+    if (!pinnedByDay.has(pin.dayKey)) pinnedByDay.set(pin.dayKey, []);
+    pinnedByDay.get(pin.dayKey)!.push(pin);
+  }
+
   type Candidate = {
     schoolId: string;
     schoolName: string;
@@ -305,6 +323,12 @@ export async function proposeVisitsForWeek(
   const candidatesByDay = new Map<string, Candidate[]>();
 
   for (const school of schools) {
+    // A school the user has pinned this week is already placed. Proposing it
+    // again on another day only for getWeeklyPlan to evict that proposal is
+    // what made the rest of the week shift every time something was added by
+    // hand: the evicted stop had already taken its turn in the clustering.
+    if (pinnedSchoolIds.has(school.id)) continue;
+
     const rule = activeRuleBySchool.get(school.id);
     const freq: FrequencyType = rule?.frequencyType ?? "BIWEEKLY";
     const lastVisit = lastVisitBySchool.get(school.id);
@@ -337,6 +361,10 @@ export async function proposeVisitsForWeek(
 
     for (const day of weekDates) {
       const dayStr = dayKeyInAppZone(day);
+      // Taken off the plan by hand. Dropped here rather than from the finished
+      // plan so the slot it would have used goes to another school instead of
+      // being lost — deleting a visit used to shrink the week by one.
+      if (skippedKeys.has(`${school.id}:${dayStr}`)) continue;
       const key = `${school.id}:${dayStr}`;
       const sessions = sessionsBySchoolDay.get(key) ?? [];
 
@@ -477,6 +505,42 @@ export async function proposeVisitsForWeek(
 
   const minutesOf = (d: Date) => minutesOfDayInAppZone(d);
 
+  /** The instant a wall-clock "HH:mm" falls at on a Miami calendar day. */
+  const instantAt = (dayKey: string, time: string) =>
+    new Date(zonedDayStart(dayKey).getTime() + timeToMins(time) * 60_000);
+
+  /**
+   * A pinned stop dressed as a Stop, so isDrivable and distanceToCluster can
+   * reason about it. Only its coordinates and its window are ever read — the
+   * rest is filler, and none of it is emitted.
+   */
+  const pinnedStopFor = (pin: PinnedStop, dayKey: string): Stop => {
+    const start = instantAt(dayKey, pin.startTime);
+    const end = instantAt(dayKey, pin.endTime);
+    const slot: Slot = { start, end, classStart: start, classEnd: end };
+    return {
+      candidate: {
+        schoolId: pin.schoolId,
+        schoolName: "",
+        dayStr: dayKey,
+        zipCode: "",
+        lat: pin.lat ?? null,
+        lng: pin.lng ?? null,
+        date: start,
+        startTime: pin.startTime,
+        endTime: pin.endTime,
+        score: 0,
+        reason: "",
+        notSeenInPerson: false,
+        weeksSinceInPerson: null,
+        noClassWarning: false,
+        visitRuleFrequency: "DEFAULT",
+        slots: [slot],
+      },
+      slot,
+    };
+  };
+
   const metresBetween = (a: Candidate, b: Candidate): number | null =>
     a.lat != null && a.lng != null && b.lat != null && b.lng != null
       ? haversineMeters(a.lat, a.lng, b.lat, b.lng)
@@ -506,23 +570,46 @@ export async function proposeVisitsForWeek(
     return true;
   };
 
-  // Days are filled richest-first, not Monday-first. There is no obligation to
-  // put something on every day: a Wednesday where one school teaches is better
-  // left empty than spent on a lone stop, when that school can instead join a
-  // Thursday that already has three others nearby.
+  // A day that has already been and gone is not planned at all. It used to be
+  // merely filled last, which meant that on a Wednesday the week still came
+  // back with fresh proposals for Monday and Tuesday whenever the budget had
+  // any room left — visits to days nobody can drive to any more, sitting in
+  // the plan as if they were real work.
   //
-  // Days that have already been and gone are filled last. Mid-week, a school is
-  // only schedulable once, so letting Monday through Thursday claim schools
-  // leaves today's plan picked over — on Friday morning Brownsville and Charles
-  // R. Drew were both missing because Thursday had already spent them.
+  // Viewing an earlier week therefore shows what actually happened (the
+  // completed visits getWeeklyPlan overlays) rather than a plan for a week
+  // that is over. The past belongs to the History tab.
   const isPast = (day: Date) => day < today;
-  const daysByOpportunity = [...weekDates].sort((a, b) => {
-    if (isPast(a) !== isPast(b)) return isPast(a) ? 1 : -1;
 
-    const aCount = (candidatesByDay.get(dayKeyInAppZone(a)) ?? []).length;
-    const bCount = (candidatesByDay.get(dayKeyInAppZone(b)) ?? []).length;
-    return bCount !== aCount ? bCount - aCount : a.getTime() - b.getTime();
-  });
+  // Today is filled FIRST, before any other day, however thin it looks.
+  //
+  // A school can only be scheduled once in a week, so whichever day is served
+  // first takes its pick. Letting a rich Thursday go first left the manager
+  // with an empty day they were already standing in — and Thursday will come
+  // round again next week, whereas today will not. Being merely one of the
+  // candidates is not good enough: the whole point of today is that it is the
+  // only day where a missed stop cannot be made up later in the week.
+  const isToday = (day: Date) => dayKeyInAppZone(day) === dayKeyInAppZone(today);
+
+  // After today, richest-first rather than Monday-first. There is no obligation
+  // to put something on every day: a Wednesday where one school teaches is
+  // better left empty than spent on a lone stop, when that school can instead
+  // join a Thursday that already has three others nearby. A day the user has
+  // pinned something on counts as richer — you are driving out there
+  // regardless, so it is the cheapest day to add a stop to.
+  const daysByOpportunity = weekDates
+    .filter((day) => !isPast(day))
+    .sort((a, b) => {
+      if (isToday(a) !== isToday(b)) return isToday(a) ? -1 : 1;
+
+      const opportunity = (day: Date) => {
+        const key = dayKeyInAppZone(day);
+        return (candidatesByDay.get(key) ?? []).length + (pinnedByDay.get(key) ?? []).length;
+      };
+      const aCount = opportunity(a);
+      const bCount = opportunity(b);
+      return bCount !== aCount ? bCount - aCount : a.getTime() - b.getTime();
+    });
 
   for (const day of daysByOpportunity) {
     if (weeklyCount >= maxVisitsPerWeek) break;
@@ -534,11 +621,26 @@ export async function proposeVisitsForWeek(
     if (pool.length === 0) continue;
 
     const room = Math.min(maxVisitsPerDay, maxVisitsPerWeek - weeklyCount);
-    // Seed with the most overdue school teaching that day, at its first class.
-    const seed = pool.shift()!;
-    const cluster: Stop[] = [{ candidate: seed, slot: seed.slots[0] }];
 
-    while (cluster.length < room && pool.length > 0) {
+    // The user's own stops for this day go in first. They are not picks — they
+    // are not counted against `room` and they are dropped again before
+    // anything is emitted — but every drivability check below now has to get
+    // around them, so the schools chosen to join a pinned stop are schools you
+    // could actually reach on either side of it.
+    const pinnedStops: Stop[] = (pinnedByDay.get(dayStr) ?? []).map((pin) =>
+      pinnedStopFor(pin, dayStr)
+    );
+    const cluster: Stop[] = [...pinnedStops];
+
+    // Seed with the most overdue school teaching that day, at its first class —
+    // unless the day already has a pinned stop to grow from, in which case the
+    // seed has to earn its place like any other addition, by fitting around it.
+    if (pinnedStops.length === 0) {
+      const seed = pool.shift()!;
+      cluster.push({ candidate: seed, slot: seed.slots[0] });
+    }
+
+    while (cluster.length - pinnedStops.length < room && pool.length > 0) {
       let bestIndex = -1;
       let bestSlot: Slot | null = null;
       let bestDistance = Infinity;
@@ -573,14 +675,18 @@ export async function proposeVisitsForWeek(
       pool.splice(bestIndex, 1);
     }
 
-    for (const stop of cluster) {
+    // Back out the pinned pseudo-stops: they were only ever here to constrain
+    // the choice, and getWeeklyPlan is the side that emits the real rows.
+    const picks = cluster.filter((stop) => !pinnedStops.includes(stop));
+
+    for (const stop of picks) {
       scheduledSchoolIds.add(stop.candidate.schoolId);
       weeklyCount += 1;
     }
     // Bake the chosen slot in, so downstream sees one concrete class time.
     chosenByDay.set(
       dayStr,
-      cluster.map(({ candidate, slot }) => ({
+      picks.map(({ candidate, slot }) => ({
         ...candidate,
         date: slot.start,
         startTime: formatTimeInAppZone(slot.start),
@@ -627,8 +733,6 @@ export async function proposeVisitsForWeek(
     }
 
     for (const c of selected) {
-      scheduledSchoolIds.add(c.schoolId);
-      weeklyCount += 1;
       proposed.push({
         schoolId: c.schoolId,
         schoolName: c.schoolName,

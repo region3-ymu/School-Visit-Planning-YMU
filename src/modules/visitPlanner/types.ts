@@ -49,6 +49,46 @@ export interface ProposedVisit {
  */
 export type ProgrammeScope = "exclude-afterschool" | "only-afterschool" | "all";
 
+/**
+ * A stop the user placed by hand, passed in so the auto plan is built AROUND
+ * it rather than on top of it.
+ *
+ * These are never proposed back — getWeeklyPlan owns the pinned rows, because
+ * it is the only side that knows they were pinned. What they do here is hold
+ * their school out of the auto picks (a school pinned on Monday must not also
+ * be offered on Thursday) and join the drivability check for their day, so the
+ * schools chosen to go alongside one are schools you could actually reach
+ * around it.
+ *
+ * They deliberately do NOT consume the weekly or daily budget: "+ Add" is
+ * described to the user as forcing an EXTRA school into the week, and making a
+ * manual addition silently evict an auto visit is exactly the behaviour that
+ * reads as the planner moving things by itself.
+ */
+export interface PinnedStop {
+  schoolId: string;
+  /** yyyy-MM-dd in Miami. */
+  dayKey: string;
+  /** HH:mm, the drop-in window the user picked. */
+  startTime: string;
+  endTime: string;
+  lat?: number | null;
+  lng?: number | null;
+}
+
+/**
+ * A school+day the user took off the plan.
+ *
+ * Applied while candidates are built, not to the finished plan: filtering
+ * afterwards spent a slot of the weekly budget on a visit that was then thrown
+ * away, so every deletion quietly shrank the week.
+ */
+export interface SkippedStop {
+  schoolId: string;
+  /** yyyy-MM-dd in Miami. */
+  dayKey: string;
+}
+
 export interface ProposeVisitsOptions {
   regionId?: string;
   programmes?: ProgrammeScope;
@@ -56,6 +96,10 @@ export interface ProposeVisitsOptions {
   maxVisitsPerDay?: number;
   workWindow?: WorkWindow;
   distanceService?: import("./distance/types").IDistanceService;
+  /** Visits the user placed by hand — see PinnedStop. */
+  pinned?: PinnedStop[];
+  /** School+day pairs the user removed by hand — see SkippedStop. */
+  skipped?: SkippedStop[];
 }
 
 export function getFrequencyDays(freq: FrequencyType): number {
