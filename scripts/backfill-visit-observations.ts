@@ -31,6 +31,21 @@
  *      were already unambiguous, so they test nothing. Read tier 3 as good
  *      evidence, not as a record.
  *
+ *   4  THE CLOCK, WITHOUT GPS (--clock-sameday). Same match, weaker standing:
+ *      no location fix, but the paperwork was filed on the day of the visit,
+ *      so createdAt is still a clock rather than a memory. The distinction
+ *      earns its keep — three of the visits it would otherwise reach were
+ *      typed five to twelve days late, two of them ninety seconds apart at a
+ *      desk, and there createdAt records the typing and nothing else.
+ *
+ *      Tier 4 also refuses any school whose timetable contains a Subject named
+ *      after a teacher. The calendar sync takes the event title as the
+ *      programme, so an event titled "David Maden" is a programme called
+ *      "David Maden" — 26 classes of it at Air Base K-8. On a timetable like
+ *      that the slot the clock matches may be the mislabelled one, and the
+ *      Program column would carry a person's name as though YMU ran it. Rename
+ *      the event in Calendar and the school becomes inferable like any other.
+ *
  * Visit.observedTeacherId arrived in 20260829 and Visit.observedSubjectId in
  * 20260916; both migrations deliberately left every existing row null, because
  * a name or a programme inferred at import time is indistinguishable afterwards
@@ -84,12 +99,13 @@ const prisma = new PrismaClient();
  */
 const GRACE_MS = 25 * 60 * 1000;
 
-type Tier = 1 | 2 | 3;
+type Tier = 1 | 2 | 3 | 4;
 
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes("--apply");
   const clock = args.includes("--clock");
+  const clock4 = args.includes("--clock-sameday");
   console.log(apply ? "APPLY — this writes to the database\n" : "DRY RUN — nothing is written\n");
 
   const visits = await prisma.visit.findMany({
@@ -103,8 +119,25 @@ async function main() {
     orderBy: { plannedStartDateTime: "asc" },
   });
 
-  const subjectBy: Record<Tier, number> = { 1: 0, 2: 0, 3: 0 };
-  const teacherBy: Record<Tier, number> = { 1: 0, 2: 0, 3: 0 };
+  const subjectBy: Record<Tier, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  const teacherBy: Record<Tier, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+
+  // Programme titles that are really somebody's name. The calendar sync takes
+  // the event title as the programme, so an event called "David Maden" becomes
+  // a Subject called "David Maden" — 26 classes of it at Air Base K-8. A
+  // school whose timetable contains one of these is not a timetable this
+  // script will infer anything from: the slot it would match might be the
+  // mislabelled one, and "David Maden" written into the Program column reads
+  // as a programme YMU runs. Fixed by renaming the event in Calendar, at which
+  // point those schools become inferable like any other.
+  const teacherNames = new Set(
+    (await prisma.teacher.findMany({ select: { name: true } })).map((t) => t.name.toLowerCase())
+  );
+  const contaminated = new Set(
+    (await prisma.subject.findMany({ select: { id: true, name: true } }))
+      .filter((sub) => teacherNames.has(sub.name.toLowerCase()))
+      .map((sub) => sub.id)
+  );
   let subjectOpen = 0, teacherOpen = 0, subjectNoClass = 0, teacherCandidates = 0;
   const writes: { id: string; tier: Tier; data: { observedSubjectId?: string; observedTeacherId?: string } }[] = [];
   const samples: string[] = [];
@@ -125,11 +158,20 @@ async function main() {
     // A GPS fix taken on site, not waved through. Without it createdAt says
     // only when the form was filled in, which could be that evening at home.
     const onSite = v.geofenceDistanceM != null && !v.geofenceOverridden;
-    const atTheTime = onSite
-      ? sessions.filter(
-          (c) => +v.createdAt >= +c.startDateTime && +v.createdAt < +c.endDateTime + GRACE_MS
-        )
-      : [];
+
+    // Tier 4's weaker standing: no GPS, but the paperwork was done on the day
+    // of the visit, so the clock is still a clock and not a memory. The
+    // difference is real — of the visits this would reach, three were typed up
+    // five to twelve days later, two of them ninety seconds apart at a desk,
+    // and for those createdAt records the typing and nothing else.
+    const sameDay = dayKeyInAppZone(v.createdAt) === dayKey;
+    const timetableIsSound = !sessions.some((c) => contaminated.has(c.subjectId));
+
+    const window = (cs: typeof sessions) =>
+      cs.filter((c) => +v.createdAt >= +c.startDateTime && +v.createdAt < +c.endDateTime + GRACE_MS);
+    const atTheTime = onSite ? window(sessions) : [];
+    const atTheTimeWeak =
+      !onSite && sameDay && timetableIsSound && clock4 ? window(sessions) : [];
 
     const only = <T,>(xs: T[]): T | null => (new Set(xs).size === 1 ? xs[0] : null);
     const data: { observedSubjectId?: string; observedTeacherId?: string } = {};
@@ -148,8 +190,9 @@ async function main() {
         ? only(sessions.filter((c) => c.teacherId === v.observedTeacherId).map((c) => c.subjectId))
         : null;
       const clock = only(atTheTime.map((c) => c.subjectId));
-      const pick = day ?? cross ?? clock;
-      const from: Tier | null = day ? 1 : cross ? 2 : clock ? 3 : null;
+      const weak = only(atTheTimeWeak.map((c) => c.subjectId));
+      const pick = day ?? cross ?? clock ?? weak;
+      const from: Tier | null = day ? 1 : cross ? 2 : clock ? 3 : weak ? 4 : null;
       if (pick && from) {
         data.observedSubjectId = pick; subjectBy[from]++; claim(from); subjectTier = from;
       } else if (sessions.length === 0) subjectNoClass++;
@@ -180,23 +223,24 @@ async function main() {
         ? only(withTeacher.filter((c) => c.subjectId === known).map((c) => c.teacherId!))
         : null;
       const clock = only(atTheTime.filter((c) => c.teacherId).map((c) => c.teacherId!));
-      const pick = day ?? cross ?? clock;
+      const weak = only(atTheTimeWeak.filter((c) => c.teacherId).map((c) => c.teacherId!));
+      const pick = day ?? cross ?? clock ?? weak;
       // A cross-derived teacher inherits the programme's tier when that is the
       // weaker of the two.
-      const crossTier: Tier = subjectTier === 3 ? 3 : 2;
-      const from: Tier | null = day ? 1 : cross ? crossTier : clock ? 3 : null;
+      const crossTier: Tier = subjectTier != null && subjectTier > 2 ? subjectTier : 2;
+      const from: Tier | null = day ? 1 : cross ? crossTier : clock ? 3 : weak ? 4 : null;
       if (pick && from) { data.observedTeacherId = pick; teacherBy[from]++; claim(from); }
       else teacherOpen++;
     }
 
     if (tier != null && Object.keys(data).length > 0) {
       writes.push({ id: v.id, tier, data });
-      if (tier === 3 && samples.length < 10) {
-        const c = atTheTime[0];
+      if (tier >= 3 && samples.length < 12) {
+        const c = atTheTime[0] ?? atTheTimeWeak[0];
         samples.push(
-          `  T3  ${dayKey} conf.${String(v.createdAt.toISOString().slice(11, 16))}Z  ` +
-          `${v.school.name.padEnd(30).slice(0, 30)} → ${c.subject.name}` +
-          `${c.teacher ? " / " + c.teacher.name : ""}`
+          `  T${tier}  ${dayKey} conf.${String(v.createdAt.toISOString().slice(11, 16))}Z  ` +
+          `${v.school.name.padEnd(30).slice(0, 30)} → ${c!.subject.name}` +
+          `${c!.teacher ? " / " + c!.teacher!.name : ""}`
         );
       }
     }
@@ -204,28 +248,31 @@ async function main() {
 
   const t12 = writes.filter((w) => w.tier < 3);
   const t3 = writes.filter((w) => w.tier === 3);
+  const t4 = writes.filter((w) => w.tier === 4);
 
   console.log(`In-person DONE visits considered: ${visits.length}\n`);
   console.log("Programme filled, by tier:");
   console.log(`  1 only one that day           ${subjectBy[1]}`);
   console.log(`  2 follows from the teacher    ${subjectBy[2]}`);
   console.log(`  3 confirmed during the class  ${subjectBy[3]}`);
+  console.log(`  4 same day, no GPS            ${subjectBy[4]}`);
   console.log(`  — still open (2+, no signal)  ${subjectOpen}`);
   console.log(`  — no class that day at all    ${subjectNoClass}`);
   console.log(`\nObserved teacher, of the ${teacherCandidates} visits that saw a YMU teacher:`);
   console.log(`  1 only one that day           ${teacherBy[1]}`);
   console.log(`  2 follows from the programme  ${teacherBy[2]}`);
   console.log(`  3 confirmed during the class  ${teacherBy[3]}`);
+  console.log(`  4 same day, no GPS            ${teacherBy[4]}`);
   console.log(`  — still open                  ${teacherOpen}`);
-  console.log(`\nVisits to update: ${writes.length}  (tiers 1-2: ${t12.length}, tier 3: ${t3.length})`);
-  if (samples.length) console.log("\nTier 3 sample — confirm time against the class it lands in:\n" + samples.join("\n"));
+  console.log(`\nVisits to update: ${writes.length}  (tiers 1-2: ${t12.length}, tier 3: ${t3.length}, tier 4: ${t4.length})`);
+  if (samples.length) console.log("\nClock-derived — confirm time against the class it lands in:\n" + samples.join("\n"));
 
   if (!apply) {
     console.log("\nDry run only. --apply writes tiers 1-2; add --clock for tier 3.");
     return;
   }
 
-  const chosen = clock ? writes : t12;
+  const chosen = writes.filter((w) => w.tier < 3 || (w.tier === 3 && clock) || (w.tier === 4 && clock4));
   if (!clock && t3.length) {
     console.log(`\nHolding back ${t3.length} tier-3 visits — pass --clock to include them.`);
   }
