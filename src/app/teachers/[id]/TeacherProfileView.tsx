@@ -50,7 +50,7 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
       .finally(() => setLoading(false));
   }, [teacherId]);
 
-  if (loading) return <Card>Cargando…</Card>;
+  if (loading) return <Card>Loading…</Card>;
   if (!data) return <Card>Teacher not found.</Card>;
 
   const { teacher, assignments, classCount, schoolCount, observations } = data;

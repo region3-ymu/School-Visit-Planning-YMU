@@ -65,9 +65,9 @@ export default function TeacherDetailPage() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-bold">Editar profesor</h1>
+          <h1 className="text-xl font-bold">Edit teacher</h1>
           <div className="text-sm text-gray-500 dark:text-gray-400">
-            Actualiza nombre y materias.
+            Update name and subjects.
           </div>
         </div>
         <Link
@@ -80,7 +80,7 @@ export default function TeacherDetailPage() {
 
       <div className="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl p-5 space-y-4">
         {loading ? (
-          <div className="text-sm text-gray-500 dark:text-gray-400">Cargando…</div>
+          <div className="text-sm text-gray-500 dark:text-gray-400">Loading…</div>
         ) : (
           <>
             {error && (

@@ -998,7 +998,7 @@ export default function WeeklyPlanner({
 
                                                         {optionsForDay.length > 1 && (
 
-                                                            <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Elegir sesión</p>
+                                                            <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Choose session</p>
 
                                                         )}
 

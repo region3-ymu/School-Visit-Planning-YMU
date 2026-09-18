@@ -227,13 +227,13 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                 <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 border-b border-gray-100 dark:border-zinc-800">
                     <h3 className="font-semibold text-gray-800 dark:text-gray-100 flex items-center">
                         <Building2 size={18} className="mr-2 text-indigo-500" />
-                        Escuelas Visitadas
+                        Schools Visited
                     </h3>
                 </div>
                 <div className="p-0">
                     {stats.visitedSchoolsList.length === 0 ? (
                         <div className="p-8 text-center text-sm text-gray-500">
-                            Aún no se han registrado visitas.
+                            No visits recorded yet.
                         </div>
                     ) : (
                         <ul className="divide-y divide-gray-100 dark:divide-zinc-800">
@@ -243,7 +243,7 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
                                         {school.name}
                                     </span>
                                     <span className="text-sm px-3 py-1 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold rounded-full">
-                                        {school.visitCount} visita{school.visitCount !== 1 ? 's' : ''}
+                                        {school.visitCount} visit{school.visitCount !== 1 ? "s" : ""}
                                     </span>
                                 </li>
                             ))}

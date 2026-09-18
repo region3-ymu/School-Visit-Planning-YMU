@@ -38,9 +38,9 @@ export default function NewTeacherPage() {
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-bold">Agregar profesor</h1>
+          <h1 className="text-xl font-bold">Add teacher</h1>
           <div className="text-sm text-gray-500 dark:text-gray-400">
-            Nombre y materias (texto libre).
+            Name and subjects (free text).
           </div>
         </div>
         <Link

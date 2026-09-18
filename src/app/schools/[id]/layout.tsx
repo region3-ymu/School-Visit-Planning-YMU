@@ -11,8 +11,8 @@ export default async function SchoolLayout({
 }) {
   const { id: schoolId } = await params;
   const tabs = [
-    { href: `/schools/${schoolId}`, label: "Horarios", icon: CalendarDays },
-    { href: `/schools/${schoolId}/teachers`, label: "Profesores", icon: Users },
+    { href: `/schools/${schoolId}`, label: "Schedules", icon: CalendarDays },
+    { href: `/schools/${schoolId}/teachers`, label: "Teachers", icon: Users },
     { href: `/schools/${schoolId}/visit-rules`, label: "Visit Rules", icon: Settings },
   ];
 

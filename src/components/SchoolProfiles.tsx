@@ -110,7 +110,7 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
                                     href={`/schools/${school.id}/teachers`}
                                     className="text-sm font-medium text-emerald-600 hover:text-emerald-700"
                                 >
-                                    Profesores
+                                    Teachers
                                 </Link>
                                 <Link
                                     href={`/schools/${school.id}/visit-rules`}

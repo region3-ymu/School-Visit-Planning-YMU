@@ -40,9 +40,9 @@ export default function TeachersListPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="text-xl font-bold">Profesores</h1>
+          <h1 className="text-xl font-bold">Teachers</h1>
           <div className="text-sm text-gray-500 dark:text-gray-400">
-            Lista de profesores de esta escuela.
+            Teachers at this school.
           </div>
         </div>
         <Link
@@ -50,19 +50,19 @@ export default function TeachersListPage() {
           className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold"
         >
           <Plus size={16} />
-          Agregar profesor
+          Add teacher
         </Link>
       </div>
 
       {!schoolId ? (
         <div className="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl p-5 text-sm text-gray-500 dark:text-gray-400">
-          Cargando ruta de escuela…
+          Loading school…
         </div>
       ) : loading ? (
-        <div className="text-sm text-gray-500 dark:text-gray-400">Cargando…</div>
+        <div className="text-sm text-gray-500 dark:text-gray-400">Loading…</div>
       ) : teachers.length === 0 ? (
         <div className="bg-white dark:bg-zinc-900 border border-gray-100 dark:border-zinc-800 rounded-xl p-5 text-sm text-gray-500 dark:text-gray-400">
-          No hay profesores aún.
+          No teachers yet.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -102,7 +102,7 @@ export default function TeachersListPage() {
                     </>
                   ) : (
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1 whitespace-pre-wrap">
-                      {t.subjects?.trim() ? t.subjects : "Sin clases en el calendario"}
+                      {t.subjects?.trim() ? t.subjects : "No classes on the calendar"}
                     </div>
                   )}
                 </div>

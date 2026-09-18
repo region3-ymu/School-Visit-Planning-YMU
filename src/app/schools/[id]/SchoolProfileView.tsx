@@ -35,7 +35,7 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
       .finally(() => setLoading(false));
   }, [schoolId]);
 
-  if (loading) return <Card>Cargando…</Card>;
+  if (loading) return <Card>Loading…</Card>;
   if (!data) return <Card>School not found.</Card>;
 
   const { school, schedule, teachers, visits } = data;
