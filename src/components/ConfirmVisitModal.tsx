@@ -22,6 +22,11 @@ type ChainState =
 
 const GEOFENCE_RADIUS_M = 250;
 
+// Enough to be a sentence, not enough to be a chore. A rating with no evidence
+// behind it is an opinion, and it is the RM's own name on it when somebody
+// asks about it months later.
+const MIN_OBSERVATION_NOTES = 15;
+
 const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
   { value: "PRINCIPAL", label: "Principal" },
   { value: "MAIN_OFFICE", label: "Main Office" },
@@ -192,19 +197,32 @@ export default function ConfirmVisitModal({
           : !!customAddress.trim();
 
   const hasStartingPoint = chainState.status !== "needs-input" || hasOrigin;
-  const canConfirm =
-    isRemote ||
-    (isBackdated
-      ? hasStartingPoint
-      : (geofenceStatus === "ok" || overrideGeofence) && hasStartingPoint);
-
-  const toggleVisitedWith = (value: string) => {
-    setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
-  };
 
   const showTalkAbout = visitedWith.some((v) => TALK_ABOUT_TRIGGERS.includes(v));
   const showTeacherObservation = !isRemote && visitedWith.includes("YMU_TEACHER");
   const skippedObs = showTeacherObservation && obsSkipReason !== null;
+
+  // Rating a teacher without writing down what you saw is an opinion with
+  // nothing behind it, and it is the RM's own name on it months later when
+  // somebody asks why. YMU 2026-09-22: when the visit actually included the
+  // YMU teacher, the note is required.
+  //
+  // Only then. Picking a skip reason already says the rubric was not filled in
+  // and why — asking for evidence of an observation that did not happen would
+  // just teach people to type a full stop.
+  const needsObsNotes = showTeacherObservation && !skippedObs;
+  const obsNotesMissing = needsObsNotes && obsNotes.trim().length < MIN_OBSERVATION_NOTES;
+
+  const canConfirm =
+    !obsNotesMissing &&
+    (isRemote ||
+      (isBackdated
+        ? hasStartingPoint
+        : (geofenceStatus === "ok" || overrideGeofence) && hasStartingPoint));
+
+  const toggleVisitedWith = (value: string) => {
+    setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
+  };
 
   const setObservation = (key: ObservationDomainKey, value: ObservationRating) => {
     setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
@@ -506,6 +524,17 @@ export default function ConfirmVisitModal({
 
           {formError && (
             <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>
+          )}
+
+          {/* Said here rather than left to a greyed-out button. A disabled
+              Confirm with no explanation reads as the app being broken, and
+              the RM has already filled in a whole rubric by this point. */}
+          {obsNotesMissing && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              You rated {teacherName ?? "the teacher"} — add a line about what you
+              saw or heard before confirming. If you did not actually observe the
+              class, pick a reason above instead.
+            </p>
           )}
 
         </div>
