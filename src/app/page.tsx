@@ -12,10 +12,12 @@ import MapZoneView from "@/components/MapZoneView";
 import VisitHistory from "@/components/VisitHistory";
 import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
+import Link from "next/link";
 import MileageGapBanner from "@/components/MileageGapBanner";
 import { canFilterByRegion, canPlanVisits, tabsForRole } from "@/lib/permissions";
 import {
   Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3, Menu, X,
+  Sparkles,
 } from "lucide-react";
 
 function HomeInner() {
@@ -171,6 +173,16 @@ function HomeInner() {
               </p>
             </div>
           )}
+          {/* Not a tab: the tabs are the week's workspace, and this is a page
+              you read once after an update lands. */}
+          <Link
+            href="/updates"
+            onClick={() => setNavOpen(false)}
+            className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-900 dark:hover:bg-zinc-800/50 dark:hover:text-gray-200 transition-colors"
+          >
+            <Sparkles size={16} />
+            <span>Updates</span>
+          </Link>
           <button
             onClick={() => signOut({ callbackUrl: "/login" })}
             className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg text-sm text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
