@@ -4,14 +4,32 @@
     {
       "name": "svp-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000
     },
     {
       "name": "svp-prod",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start", "--", "--port", "3100"],
+      "runtimeArgs": [
+        "run",
+        "start",
+        "--",
+        "--port",
+        "3100"
+      ],
       "port": 3100
+    },
+    {
+      "name": "ymua-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-lc",
+        "cd /Users/Region3/YMU-A && npm run dev -- -p 3200"
+      ],
+      "port": 3200
     }
   ]
 }
