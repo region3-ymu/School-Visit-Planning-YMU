@@ -17,7 +17,7 @@ import MileageGapBanner from "@/components/MileageGapBanner";
 import { canFilterByRegion, canPlanVisits, tabsForRole } from "@/lib/permissions";
 import {
   Compass, CalendarDays, Users, Map as MapIcon, History, LogOut, ChevronDown, BarChart3, Menu, X,
-  Sparkles,
+  Sparkles, HelpCircle,
 } from "lucide-react";
 
 function HomeInner() {
@@ -173,8 +173,16 @@ function HomeInner() {
               </p>
             </div>
           )}
-          {/* Not a tab: the tabs are the week's workspace, and this is a page
-              you read once after an update lands. */}
+          {/* Not tabs: the tabs are the week's workspace, and these are pages
+              you open when you need them, not every day. */}
+          <Link
+            href="/faq"
+            onClick={() => setNavOpen(false)}
+            className="w-full flex items-center space-x-2 px-3 py-2 rounded-lg text-sm text-gray-500 hover:bg-gray-50 hover:text-gray-900 dark:hover:bg-zinc-800/50 dark:hover:text-gray-200 transition-colors"
+          >
+            <HelpCircle size={16} />
+            <span>Help</span>
+          </Link>
           <Link
             href="/updates"
             onClick={() => setNavOpen(false)}
