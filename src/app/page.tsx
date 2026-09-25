@@ -13,6 +13,7 @@ import VisitHistory from "@/components/VisitHistory";
 import MileageReports from "@/components/MileageReports";
 import AIChat from "@/components/AIChat";
 import Link from "next/link";
+import ReportProblemButton from "@/components/ReportProblemButton";
 import MileageGapBanner from "@/components/MileageGapBanner";
 import { canFilterByRegion, canPlanVisits, tabsForRole } from "@/lib/permissions";
 import {
@@ -175,6 +176,7 @@ function HomeInner() {
           )}
           {/* Not tabs: the tabs are the week's workspace, and these are pages
               you open when you need them, not every day. */}
+          <ReportProblemButton />
           <Link
             href="/faq"
             onClick={() => setNavOpen(false)}
