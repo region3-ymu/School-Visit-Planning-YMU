@@ -93,9 +93,14 @@ function loadFromFile(file: string): YmuaSchool[] {
   return parsed as YmuaSchool[];
 }
 
-/** US ZIP out of a free-text address; the column is non-null with a "" default. */
+/**
+ * US ZIP out of a free-text address; the column is non-null with a "" default.
+ * Anchored to the END of the string: the street number ("12829 SW 272nd St,
+ * ...") is just as often 5 digits as the ZIP is, and a match anywhere in the
+ * address grabs whichever comes first.
+ */
 function extractZip(address: string | null): string {
-  const match = address?.match(/\b(\d{5})(?:-\d{4})?\b/);
+  const match = address?.trim().match(/(\d{5})(?:-\d{4})?\s*$/);
   return match ? match[1] : "";
 }
 
