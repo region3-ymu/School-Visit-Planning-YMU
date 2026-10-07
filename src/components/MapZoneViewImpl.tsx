@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getSchools, getOptimalRouteForDay, getMyHomeLocation, setMyHomeLocation, type DayRouteResult } from "@/app/actions";
+import { getSchools, getOptimalRouteForDay, getMyHomeLocation, setMyHomeLocation, getWeeklyPlan, type DayRouteResult } from "@/app/actions";
+import type { VisitInfo } from "@/lib/types";
+import { addDaysToDayKey, dayKeyInAppZone, mondayOfDayKey } from "@/lib/timezone";
 import { usePlannerStore } from "@/store/plannerStore";
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -18,8 +20,10 @@ import {
   ExternalLink,
   ChevronUp,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
-import { format, addDays, startOfWeek, isTuesday } from "date-fns";
+import { format, isTuesday } from "date-fns";
 import {
   displayCoords,
   formatDistance,
@@ -110,16 +114,83 @@ const DEPARTURE_TIMES = Array.from({ length: 41 }, (_, i) => {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 });
 
-export default function MapZoneViewImpl() {
+/** Noon, so date-fns can name the day without a midnight instant tipping over a zone. */
+const labelDateFor = (dayKey: string) => new Date(`${dayKey}T12:00:00`);
+
+/** Today, or the next Monday when today is a weekend — the first day worth routing. */
+function firstRoutableDay(): string {
+  const today = dayKeyInAppZone(new Date());
+  const weekday = labelDateFor(today).getDay();
+  if (weekday === 6) return addDaysToDayKey(today, 2);
+  if (weekday === 0) return addDaysToDayKey(today, 1);
+  return today;
+}
+
+export default function MapZoneViewImpl({ regionFilter = null }: { regionFilter?: string | null }) {
   const [schools, setSchools] = useState<
     { id: string; name: string; zipCode: string; lat: number | null; lng: number | null }[]
   >([]);
-  const { plannedVisits, weekStartDateStr } = usePlannerStore();
+  const { plannedVisits: plannerVisits, plannedFor, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay } =
+    usePlannerStore();
 
-  const weekStart = startOfWeek(new Date(weekStartDateStr), { weekStartsOn: 1 });
-  const weekDays = Array.from({ length: 5 }, (_, i) => addDays(weekStart, i));
+  // BUG-030 (Eric Levy): the day picker used to offer only the five days of
+  // whatever week the Weekly Planner last showed IN THIS BROWSER — a value
+  // persisted in localStorage — while defaulting to today. Once those two
+  // disagreed, the list showed days of some other week, the selection was
+  // silently today, and nothing beyond today could be routed. The route
+  // planner now owns its week, starting from this one, and fetches that week's
+  // plan itself when the planner's copy is for something else.
+  const [selectedDate, setSelectedDate] = useState(firstRoutableDay);
+  const routeWeekKey = mondayOfDayKey(selectedDate);
+  const earliestWeekKey = mondayOfDayKey(firstRoutableDay());
+  const weekDayKeys = Array.from({ length: 5 }, (_, i) => addDaysToDayKey(routeWeekKey, i));
 
-  const [selectedDate, setSelectedDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
+  // Same key WeeklyPlanner builds. When it matches, the planner's copy is the
+  // one to route — it carries edits made since it was fetched.
+  const routePlanKey = [routeWeekKey, regionFilter ?? "own", maxVisitsPerWeek, maxVisitsPerDay].join("|");
+  const plannerHasThisWeek = plannedFor === routePlanKey;
+  const [fetchedPlan, setFetchedPlan] = useState<{ key: string; visits: VisitInfo[] } | null>(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (plannerHasThisWeek || fetchedPlan?.key === routePlanKey) return;
+    let cancelled = false;
+    setPlanLoading(true);
+    setPlanError(null);
+    getWeeklyPlan(routeWeekKey, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter)
+      .then((visits) => {
+        if (!cancelled) setFetchedPlan({ key: routePlanKey, visits });
+      })
+      .catch((e) => {
+        if (!cancelled) setPlanError(e instanceof Error ? e.message : "Couldn't load that week's plan");
+      })
+      .finally(() => {
+        if (!cancelled) setPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // routePlanKey is the whole question; overrides are read, not watched —
+    // same rule as WeeklyPlanner's own fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routePlanKey, plannerHasThisWeek]);
+
+  const plannedVisits = useMemo(
+    () =>
+      plannerHasThisWeek
+        ? plannerVisits
+        : fetchedPlan?.key === routePlanKey
+          ? fetchedPlan.visits
+          : [],
+    [plannerHasThisWeek, plannerVisits, fetchedPlan, routePlanKey]
+  );
+
+  const chooseDay = (dayKey: string) => {
+    setSelectedDate(dayKey);
+    setRoute(null);
+    setManualOrder(null);
+  };
   const [savedStart, setSavedStart] = useState<SavedStartLocation>(defaultSavedStart);
   const [startMode, setStartMode] = useState<StartMode>("home");
   const [homeAddress, setHomeAddress] = useState("");
@@ -176,7 +247,7 @@ export default function MapZoneViewImpl() {
     () =>
       plannedVisits.filter(
         (v) =>
-          format(new Date(v.date), "yyyy-MM-dd") === selectedDate && !v.isSkipped && !v.isCompleted
+          dayKeyInAppZone(new Date(v.date)) === selectedDate && !v.isSkipped && !v.isCompleted
       ),
     [plannedVisits, selectedDate]
   );
@@ -406,7 +477,7 @@ export default function MapZoneViewImpl() {
               Object.entries(
                 plannedVisits.reduce(
                   (acc, visit) => {
-                    const d = format(new Date(visit.date), "yyyy-MM-dd");
+                    const d = dayKeyInAppZone(new Date(visit.date));
                     if (!acc[d]) acc[d] = [];
                     const s = schools.find((sch) => sch.id === visit.schoolId);
                     if (s?.lat && s?.lng) acc[d].push([s.lat, s.lng]);
@@ -436,7 +507,7 @@ export default function MapZoneViewImpl() {
             <div className="flex items-center gap-2 mb-3">
               <Route className="text-indigo-600" size={22} />
               <h2 className="text-lg font-bold text-gray-800 dark:text-gray-100">
-                Plan today&apos;s route
+                Plan a day&apos;s route
               </h2>
             </div>
 
@@ -444,22 +515,37 @@ export default function MapZoneViewImpl() {
             <label className="block text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
               Visit day
             </label>
-            <select
-              value={selectedDate}
-              onChange={(e) => {
-                setSelectedDate(e.target.value);
-                setRoute(null);
-                setManualOrder(null);
-              }}
-              className="w-full min-h-[44px] px-3 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm mb-3"
-            >
-              {weekDays.map((d) => (
-                <option key={d.toISOString()} value={format(d, "yyyy-MM-dd")}>
-                  {format(d, "EEEE, MMM d")}
-                  {isTuesday(d) ? " (e.g. Central)" : ""}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2 mb-3">
+              <button
+                type="button"
+                aria-label="Previous week"
+                disabled={routeWeekKey <= earliestWeekKey}
+                onClick={() => chooseDay(addDaysToDayKey(routeWeekKey, -7))}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700 disabled:opacity-40"
+              >
+                <ChevronLeft size={18} />
+              </button>
+              <select
+                value={selectedDate}
+                onChange={(e) => chooseDay(e.target.value)}
+                className="flex-1 min-h-[44px] px-3 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+              >
+                {weekDayKeys.map((key) => (
+                  <option key={key} value={key}>
+                    {format(labelDateFor(key), "EEEE, MMM d")}
+                    {isTuesday(labelDateFor(key)) ? " (e.g. Central)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                aria-label="Next week"
+                onClick={() => chooseDay(addDaysToDayKey(routeWeekKey, 7))}
+                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700"
+              >
+                <ChevronRight size={18} />
+              </button>
+            </div>
 
             {/* Start location */}
             <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-2">
@@ -609,7 +695,13 @@ export default function MapZoneViewImpl() {
             <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
               Planned visits ({todaysVisits.length})
             </p>
-            {todaysVisits.length === 0 ? (
+            {planLoading ? (
+              <p className="text-sm text-gray-500 mb-3 flex items-center gap-2">
+                <Loader2 size={14} className="animate-spin" /> Loading that week&apos;s plan…
+              </p>
+            ) : planError ? (
+              <p className="text-sm text-red-600 mb-3">{planError}</p>
+            ) : todaysVisits.length === 0 ? (
               <p className="text-sm text-gray-500 mb-3">
                 No visits planned for this day. Add visits in the Weekly Planner first.
               </p>

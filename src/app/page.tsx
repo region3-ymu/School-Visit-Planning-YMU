@@ -247,7 +247,7 @@ function HomeInner() {
           )}
           {currentTab === "history" && <VisitHistory regionFilter={selectedRegionId || null} />}
           {currentTab === "profiles" && <SchoolProfiles regionFilter={selectedRegionId || null} />}
-          {currentTab === "map" && <MapZoneView />}
+          {currentTab === "map" && <MapZoneView regionFilter={selectedRegionId || null} />}
           {currentTab === "reports" && <MileageReports regionFilter={selectedRegionId || null} />}
           </div>
         </main>
