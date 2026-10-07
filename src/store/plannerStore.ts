@@ -13,6 +13,16 @@ interface PlannerState {
     activeTab: PlannerTab;
     setActiveTab: (tab: PlannerTab) => void;
 
+    /**
+     * FR-029: the Dashboard's "Log a visit" button. It switches to Visit
+     * History and leaves this set; VisitHistory opens its own form and clears
+     * it — one form, reached from two places. Never persisted: a reload must
+     * not reopen a form nobody just asked for.
+     */
+    logVisitRequested: boolean;
+    requestLogVisit: () => void;
+    clearLogVisitRequest: () => void;
+
     weekStartDateStr: string;
     setWeekStartDate: (date: Date) => void;
 
@@ -49,6 +59,10 @@ export const usePlannerStore = create<PlannerState>()(
         (set) => ({
             activeTab: 'dashboard',
             setActiveTab: (tab) => set({ activeTab: tab }),
+
+            logVisitRequested: false,
+            requestLogVisit: () => set({ logVisitRequested: true, activeTab: 'history' }),
+            clearLogVisitRequest: () => set({ logVisitRequested: false }),
 
             weekStartDateStr: new Date().toISOString(),
             setWeekStartDate: (date) => set({ weekStartDateStr: date.toISOString() }),

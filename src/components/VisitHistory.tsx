@@ -20,6 +20,7 @@ import TeacherObservationFields, {
     type ObservationState,
 } from "./visit/TeacherObservationFields";
 import { addDaysToDayKey, dayKeyInAppZone, mondayOfDayKey, zonedDayStart } from "@/lib/timezone";
+import { usePlannerStore } from "@/store/plannerStore";
 
 const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
     { value: "PRINCIPAL", label: "Principal" },
@@ -302,6 +303,16 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setVisitDate(format(new Date(), "yyyy-MM-dd"));
         setShowModal(true);
     };
+
+    // Arrived here from the Dashboard's "Log a visit" button (FR-029).
+    const { logVisitRequested, clearLogVisitRequest } = usePlannerStore();
+    useEffect(() => {
+        if (!logVisitRequested) return;
+        clearLogVisitRequest();
+        handleOpenAdd();
+        // handleOpenAdd only resets form state; the request flag is the trigger.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [logVisitRequested]);
 
     const requestGps = () => {
         if (!navigator.geolocation) {

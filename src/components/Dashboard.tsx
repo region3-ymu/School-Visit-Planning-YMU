@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { getDashboardStats, syncExportSheet } from "@/app/actions";
+import { usePlannerStore } from "@/store/plannerStore";
 import { OVERSIGHT_ROLES } from "@/lib/permissions";
 import {
     Building2,
@@ -13,6 +14,7 @@ import {
     Footprints,
     MapPinOff,
     Phone,
+    Plus,
     RefreshCw,
     Video,
 } from "lucide-react";
@@ -114,7 +116,14 @@ function ExportSyncCard() {
     );
 }
 
-export default function Dashboard({ regionFilter }: { regionFilter?: string | null }) {
+export default function Dashboard({
+    regionFilter,
+    canLogVisit = false,
+}: {
+    regionFilter?: string | null;
+    canLogVisit?: boolean;
+}) {
+    const requestLogVisit = usePlannerStore((s) => s.requestLogVisit);
     const [stats, setStats] = useState({
         totalActiveSchools: 0,
         dueThisWeek: 0,
@@ -140,7 +149,21 @@ export default function Dashboard({ regionFilter }: { regionFilter?: string | nu
 
     return (
         <div className="p-4 sm:p-6">
-            <h2 className="text-xl sm:text-2xl font-bold mb-6 text-gray-800 dark:text-gray-100">Overview Dashboard</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-800 dark:text-gray-100">Overview Dashboard</h2>
+                {/* FR-029 (Eric Levy): logging a visit or a call used to mean
+                    Visit History first, then its button. Same form, one tap. */}
+                {canLogVisit && (
+                    <button
+                        type="button"
+                        onClick={requestLogVisit}
+                        className="inline-flex items-center gap-2 px-4 py-2 min-h-[44px] rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium transition-colors"
+                    >
+                        <Plus size={18} />
+                        Log a visit
+                    </button>
+                )}
+            </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
                 <StatCard

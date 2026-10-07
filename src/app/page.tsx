@@ -238,7 +238,12 @@ function HomeInner() {
               missing at confirm time, and the RM who needs to know is the one
               planning their week, not the one already opening a report. */}
           <MileageGapBanner />
-          {currentTab === "dashboard" && <Dashboard regionFilter={selectedRegionId || null} />}
+          {currentTab === "dashboard" && (
+            <Dashboard
+              regionFilter={selectedRegionId || null}
+              canLogVisit={role ? canPlanVisits(role) : false}
+            />
+          )}
           {currentTab === "planner" && (
             <WeeklyPlanner
               regionFilter={selectedRegionId || null}
