@@ -24,6 +24,11 @@ export async function submitReport(_previous: ReportState, formData: FormData): 
   const severityRaw = String(formData.get("severity") ?? "");
   const severity = SEVERITIES.has(severityRaw) ? severityRaw : null;
 
+  // Base64 JPEG, already shrunk in the browser (ReportProblemButton). Checked
+  // loosely: YMU-A's relay route is the one that decides what it will store.
+  const screenshotRaw = String(formData.get("screenshot") ?? "");
+  const screenshot = /^[A-Za-z0-9+/=]+$/.test(screenshotRaw) ? screenshotRaw : null;
+
   return relayReport({
     email: user.email,
     name: user.name ?? null,
@@ -36,5 +41,6 @@ export async function submitReport(_previous: ReportState, formData: FormData): 
     pagePath: String(formData.get("page_path") ?? "/"),
     userAgent: String(formData.get("user_agent") ?? "") || null,
     viewport: String(formData.get("viewport") ?? "") || null,
+    screenshot,
   });
 }

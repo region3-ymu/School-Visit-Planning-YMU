@@ -521,14 +521,17 @@ export default function MapZoneViewImpl({ regionFilter = null }: { regionFilter?
                 aria-label="Previous week"
                 disabled={routeWeekKey <= earliestWeekKey}
                 onClick={() => chooseDay(addDaysToDayKey(routeWeekKey, -7))}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700 disabled:opacity-40"
+                className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700 disabled:opacity-40"
               >
                 <ChevronLeft size={18} />
               </button>
+              {/* min-w-0: a <select> is as wide as its longest option ("Tuesday,
+                  Oct 20 (e.g. Central)") unless told otherwise, which pushed
+                  the next-week arrow off a 338px phone (BUG-036). */}
               <select
                 value={selectedDate}
                 onChange={(e) => chooseDay(e.target.value)}
-                className="flex-1 min-h-[44px] px-3 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
+                className="flex-1 min-w-0 min-h-[44px] px-3 rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm"
               >
                 {weekDayKeys.map((key) => (
                   <option key={key} value={key}>
@@ -541,7 +544,7 @@ export default function MapZoneViewImpl({ regionFilter = null }: { regionFilter?
                 type="button"
                 aria-label="Next week"
                 onClick={() => chooseDay(addDaysToDayKey(routeWeekKey, 7))}
-                className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700"
+                className="shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center rounded-lg border border-gray-200 dark:border-zinc-700"
               >
                 <ChevronRight size={18} />
               </button>

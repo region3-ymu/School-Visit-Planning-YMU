@@ -45,6 +45,8 @@ export type RelayInput = {
   pagePath: string;
   userAgent: string | null;
   viewport: string | null;
+  /** Base64 JPEG from the report dialog, or null. */
+  screenshot: string | null;
 };
 
 export type RelayResult = { ok: true; reportNumber: number | null } | { ok: false; error: string };
@@ -74,6 +76,9 @@ export async function relayReport(input: RelayInput): Promise<RelayResult> {
         message: input.message,
         kind: input.kind,
         severity: input.severity,
+        // Stored by YMU-A in its app-feedback bucket (its 0142) — SVP users
+        // have no session there to upload it themselves.
+        screenshot: input.screenshot ? { data: input.screenshot, content_type: "image/jpeg" } : null,
         device_info: {
           userAgent: input.userAgent,
           viewport: input.viewport,
