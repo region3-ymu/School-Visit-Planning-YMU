@@ -1255,8 +1255,12 @@ export async function getVisitHistory(regionFilter?: string | null) {
 
 /**
  * Everything the Log Visit form can record. Same shape the Confirm Visit modal
- * sends, minus the geofence — a visit typed in after the fact can't prove where
- * the RM was standing, so it carries no location check.
+ * sends. The geofence fields used to be left out on the theory that a manual
+ * log is typed in after the fact — but a same-day in-person log is usually
+ * typed at the school, and once the Dashboard's quick button made this the
+ * main path, visits stopped carrying any location (YMU 2026-10-12). The form
+ * now runs the check for a visit logged today; an earlier day arrives as
+ * unverified, exactly as it does through the confirm modal.
  */
 const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
@@ -1277,6 +1281,8 @@ const manualVisitSchema = z.object({
   obsNotes: z.string().max(2000).optional(),
   obsSkipReason: observationSkipReasonSchema.optional(),
   obsSkipNotes: z.string().max(2000).optional(),
+  geofenceDistanceM: z.number().optional(),
+  geofenceOverridden: z.boolean().default(false),
 });
 
 export async function addManualVisit(schoolId: string, dateIso: string, formData: unknown) {
@@ -1355,6 +1361,8 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       principalNotes: data.principalNotes ?? undefined,
       hasInstrumentRequest: data.hasInstrumentRequest,
       instrumentRequestDetails: data.instrumentRequestDetails ?? undefined,
+      geofenceDistanceM: isRemote ? undefined : data.geofenceDistanceM ?? undefined,
+      geofenceOverridden: isRemote ? false : data.geofenceOverridden,
       // A remote visit has no classroom, and a skipped observation carries a
       // reason instead of ratings — never both.
       obsPlanningPrep: isRemote || skippedObs ? undefined : data.obsPlanningPrep,

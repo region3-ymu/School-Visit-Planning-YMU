@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, MapPin, AlertTriangle, CheckCircle2, Clock, Loader2 } from "lucide-react";
+import { X, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { isToday } from "date-fns";
-import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations, getSchoolLocation } from "@/app/actions";
-import { haversineMeters } from "@/lib/geo";
+import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
+import { useGeofence } from "./visit/useGeofence";
+import GeofenceNotice from "./visit/GeofenceNotice";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
@@ -20,8 +21,6 @@ type ChainState =
   | { status: "chained"; label: string }
   | { status: "needs-input" };
 
-const GEOFENCE_RADIUS_M = 250;
-
 // Enough to be a sentence, not enough to be a chore. A rating with no evidence
 // behind it is an opinion, and it is the RM's own name on it when somebody
 // asks about it months later.
@@ -35,8 +34,6 @@ const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
 ];
 
 const TALK_ABOUT_TRIGGERS = ["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER"];
-
-type GeofenceStatus = "checking" | "ok" | "far" | "error" | "no-target";
 
 export default function ConfirmVisitModal({
   schoolId,
@@ -76,9 +73,15 @@ export default function ConfirmVisitModal({
   // means anything — the same rule the manual Log Visit form already applied.
   const isBackdated = !isToday(visitDate);
 
-  const [geofenceStatus, setGeofenceStatus] = useState<GeofenceStatus>("checking");
-  const [geofenceDistanceM, setGeofenceDistanceM] = useState<number | null>(null);
-  const [geofenceError, setGeofenceError] = useState<string | null>(null);
+  // A plan item rehydrated by an older build can arrive without coordinates;
+  // the hook asks the school's own row first and only falls back to these.
+  const {
+    status: geofenceStatus,
+    distanceM: geofenceDistanceM,
+    error: geofenceError,
+    coords: gpsCoords,
+  } = useGeofence(schoolId, !isBackdated, { lat: schoolLat, lng: schoolLng });
+  const gpsError = geofenceStatus === "error" ? geofenceError : null;
   const [overrideGeofence, setOverrideGeofence] = useState(false);
 
   const [chainState, setChainState] = useState<ChainState>({ status: "loading" });
@@ -87,10 +90,8 @@ export default function ConfirmVisitModal({
   const [savedHomeAddress, setSavedHomeAddress] = useState<{ address: string; lat: number; lng: number } | null>(null);
   const [homeSaveStatus, setHomeSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [customAddress, setCustomAddress] = useState("");
-  // The geofence check below already asks the browser for a fix; reusing it as a
-  // possible mileage origin means the RM is never prompted for GPS twice.
-  const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [gpsError, setGpsError] = useState<string | null>(null);
+  // gpsCoords above is the geofence's own fix; reusing it as a possible
+  // mileage origin means the RM is never prompted for GPS twice.
   const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
   type Office = Awaited<ReturnType<typeof getOfficeLocations>>[number];
   const [office, setOffice] = useState<Office | null>(null);
@@ -106,59 +107,6 @@ export default function ConfirmVisitModal({
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (isBackdated) return;
-    if (!navigator.geolocation) {
-      setGeofenceStatus("error");
-      setGeofenceError("Geolocation is not supported by this browser");
-      return;
-    }
-    let cancelled = false;
-
-    // Asked for up front, in parallel with the GPS fix, so it costs nothing:
-    // the browser takes seconds to answer, the database takes milliseconds.
-    //
-    // The props are only a hint. Where a school IS lives in one place — its
-    // row — and the plan item that opened this modal is not that place: a
-    // pinned visit or a plan rehydrated from localStorage by an older build
-    // can arrive without coordinates, and then this screen told a Regional
-    // Manager that a school with a perfectly good address on file had no
-    // saved location. Falling back to the props keeps the check working if
-    // the lookup itself fails.
-    const targetPromise = getSchoolLocation(schoolId).catch(() => null);
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        if (cancelled) return;
-        setGpsCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-
-        const stored = await targetPromise;
-        if (cancelled) return;
-        const target =
-          stored ??
-          (schoolLat != null && schoolLng != null ? { lat: schoolLat, lng: schoolLng } : null);
-        if (!target) {
-          setGeofenceStatus("no-target");
-          return;
-        }
-        const distance = haversineMeters(pos.coords.latitude, pos.coords.longitude, target.lat, target.lng);
-        setGeofenceDistanceM(distance);
-        setGeofenceStatus(distance <= GEOFENCE_RADIUS_M ? "ok" : "far");
-      },
-      (err) => {
-        if (cancelled) return;
-        setGeofenceStatus("error");
-        setGeofenceError(err.message || "Could not get GPS location");
-        setGpsError(err.message || "Could not get GPS location");
-      },
-      { enableHighAccuracy: true, timeout: 15000 }
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [schoolId, schoolLat, schoolLng, isBackdated]);
 
   useEffect(() => {
     getPreviousVisitToday(visitDate.toISOString()).then((prev) => {
@@ -367,50 +315,14 @@ export default function ConfirmVisitModal({
 
           {/* Geofence status */}
           {!isRemote && !isBackdated && (
-          <div
-            className={`rounded-lg border p-3 text-sm flex items-start gap-2 ${
-              geofenceStatus === "ok"
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-400"
-                : geofenceStatus === "checking"
-                  ? "border-gray-200 bg-gray-50 text-gray-600 dark:border-zinc-700 dark:bg-zinc-800/50 dark:text-gray-400"
-                  : "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-400"
-            }`}
-          >
-            {geofenceStatus === "checking" ? (
-              <Loader2 size={16} className="animate-spin shrink-0 mt-0.5" />
-            ) : geofenceStatus === "ok" ? (
-              <MapPin size={16} className="shrink-0 mt-0.5" />
-            ) : (
-              <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-            )}
-            <div className="flex-1">
-              {geofenceStatus === "checking" && <p>Checking your location…</p>}
-              {geofenceStatus === "ok" && (
-                <p>You&apos;re at the school ({Math.round(geofenceDistanceM ?? 0)}m away).</p>
-              )}
-              {geofenceStatus === "far" && (
-                <p>
-                  You&apos;re {Math.round(geofenceDistanceM ?? 0)}m from {schoolName} — more than{" "}
-                  {GEOFENCE_RADIUS_M}m. Confirm button is disabled unless you override.
-                </p>
-              )}
-              {geofenceStatus === "error" && <p>{geofenceError ?? "Could not check your location."}</p>}
-              {geofenceStatus === "no-target" && (
-                <p>This school has no saved location, so distance can&apos;t be verified.</p>
-              )}
-              {geofenceStatus !== "ok" && geofenceStatus !== "checking" && (
-                <label className="mt-2 flex items-center gap-2 text-xs font-medium cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={overrideGeofence}
-                    onChange={(e) => setOverrideGeofence(e.target.checked)}
-                  />
-                  Confirm anyway
-                </label>
-              )}
-            </div>
-          </div>
-
+            <GeofenceNotice
+              status={geofenceStatus}
+              distanceM={geofenceDistanceM}
+              error={geofenceError}
+              schoolName={schoolName}
+              override={overrideGeofence}
+              onOverrideChange={setOverrideGeofence}
+            />
           )}
 
           {/* Origin for mileage — only asked for the first visit of the day;

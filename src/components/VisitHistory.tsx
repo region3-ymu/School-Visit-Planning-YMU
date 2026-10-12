@@ -21,6 +21,8 @@ import TeacherObservationFields, {
 } from "./visit/TeacherObservationFields";
 import { addDaysToDayKey, dayKeyInAppZone, mondayOfDayKey, zonedDayStart } from "@/lib/timezone";
 import { usePlannerStore } from "@/store/plannerStore";
+import { useGeofence } from "./visit/useGeofence";
+import GeofenceNotice from "./visit/GeofenceNotice";
 
 const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
     { value: "PRINCIPAL", label: "Principal" },
@@ -206,6 +208,23 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     // nothing about where the RM drove from last Tuesday.
     const allowGps = isToday(new Date(visitDate + "T12:00:00"));
     const visitIso = visitDate ? new Date(visitDate + "T12:00:00Z").toISOString() : null;
+
+    // The same "are you at the school?" check confirming a planned visit runs.
+    // This form never had it, and once the Dashboard's "Log a visit" button
+    // made it the quick path, in-person visits stopped carrying a location at
+    // all (YMU 2026-10-12). Only for a new in-person visit to a school, today:
+    // an edit, an earlier day or a stop at the office has nothing to check.
+    const geofenceApplies =
+        showModal && !editingId && !isRemote && !isOfficePick && !!selectedSchool && allowGps;
+    const geofence = useGeofence(selectedSchool || null, geofenceApplies);
+    // Keyed to the school it was ticked for, so switching school asks again.
+    const [geofenceOverrideFor, setGeofenceOverrideFor] = useState<string | null>(null);
+    const overrideGeofence = geofenceOverrideFor === selectedSchool;
+    const geofenceBlocks = geofenceApplies && geofence.status !== "ok" && !overrideGeofence;
+    const selectedSchoolName =
+        schools.find((s) => s.id === selectedSchool)?.name ??
+        otherSchools.find((s) => s.id === selectedSchool)?.name ??
+        "the school";
 
     // Re-checked whenever the modal opens or its date changes, and again after a
     // save, so logging a whole day in sequence shows each stop chaining onto the
@@ -465,6 +484,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
                     observedTeacherId: showTeacherObservation ? observedTeacherId || undefined : undefined,
                     observedSubjectId: observedSubjectId || undefined,
+                    // Same rule as ConfirmVisitModal: anything short of a
+                    // passed check — an earlier day, no fix, an override — is
+                    // recorded as unverified.
+                    geofenceDistanceM: geofenceApplies ? geofence.distanceM ?? undefined : undefined,
+                    geofenceOverridden: !isRemote && !isOfficePick && (!geofenceApplies || geofence.status !== "ok"),
                 });
             }
         } catch (err) {
@@ -872,6 +896,18 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     </div>
                                     )}
 
+                                    {geofenceApplies && (
+                                        <GeofenceNotice
+                                            status={geofence.status}
+                                            distanceM={geofence.distanceM}
+                                            error={geofence.error}
+                                            schoolName={selectedSchoolName}
+                                            override={overrideGeofence}
+                                            onOverrideChange={(v) => setGeofenceOverrideFor(v ? selectedSchool : null)}
+                                            actionLabel="Save"
+                                        />
+                                    )}
+
                                     {!isRemote && <VehiclePicker value={vehicle} onChange={setVehicle} />}
 
                                     {/* Already have a stop that day: say what it chains from rather
@@ -1024,7 +1060,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                         </div>
                         <div className="p-4 bg-gray-50 dark:bg-zinc-800/50 flex justify-end space-x-3 shrink-0">
                             <button onClick={() => setShowModal(false)} className="px-4 py-2 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-lg transition-colors">Cancel</button>
-                            <button onClick={handleSave} disabled={loading || !selectedSchool || !visitDate} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
+                            <button onClick={handleSave} disabled={loading || !selectedSchool || !visitDate || geofenceBlocks} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
                                 {editingId ? "Save Changes" : "Save Record"}
                             </button>
                         </div>
