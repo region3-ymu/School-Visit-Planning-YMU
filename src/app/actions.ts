@@ -144,27 +144,37 @@ export async function getDashboardStats(regionFilter?: string | null) {
   const weekStart = zonedDayStart(mondayOfDayKey(todayKey));
   const weekEnd = addDays(weekStart, 7);
 
-  let dueThisWeek = 0;
-  let overdue = 0;
-  let neverVisited = 0;
+  // The schools behind each number, not only the count (FR-038, Carlos Fabre:
+  // "Overdue: 7" says there is work and not which work). Day keys rather than
+  // Dates so the client prints Miami's calendar day, not its own.
+  const overdueSchools: { id: string; name: string; lastVisitKey: string; daysLate: number }[] = [];
+  const dueSchools: { id: string; name: string; dueKey: string }[] = [];
+  const neverVisitedSchools: { id: string; name: string }[] = [];
 
   for (const school of schools) {
-    const status = cadenceStatus(
-      lastInPerson.get(school.id),
-      activeRules.get(school.id)?.frequencyType,
-      today
-    );
+    const last = lastInPerson.get(school.id);
+    const status = cadenceStatus(last, activeRules.get(school.id)?.frequencyType, today);
     if (status.neverVisited) {
       // Counted apart from overdue on purpose: "twelve schools nobody has ever
       // walked into" and "one school is three days late" are different jobs.
-      neverVisited += 1;
+      neverVisitedSchools.push({ id: school.id, name: school.name });
     } else if (status.isOverdue) {
-      overdue += 1;
+      overdueSchools.push({
+        id: school.id,
+        name: school.name,
+        lastVisitKey: dayKeyInAppZone(last!),
+        daysLate: (status.daysSinceLast ?? 0) - status.freqDays,
+      });
     } else if (status.dueDate && status.dueDate < weekEnd) {
       // Falls due before this week is out, and is not late yet.
-      dueThisWeek += 1;
+      dueSchools.push({ id: school.id, name: school.name, dueKey: dayKeyInAppZone(status.dueDate) });
     }
   }
+
+  // Most urgent first: the latest overdue, the soonest due.
+  overdueSchools.sort((a, b) => b.daysLate - a.daysLate || a.name.localeCompare(b.name));
+  dueSchools.sort((a, b) => a.dueKey.localeCompare(b.dueKey) || a.name.localeCompare(b.name));
+  neverVisitedSchools.sort((a, b) => a.name.localeCompare(b.name));
 
   // ─── Cancellations reported from the field ────────────────────────────────
   //
@@ -221,9 +231,12 @@ export async function getDashboardStats(regionFilter?: string | null) {
 
   return {
     totalActiveSchools: totalSchools,
-    dueThisWeek,
-    overdue,
-    neverVisited,
+    dueThisWeek: dueSchools.length,
+    overdue: overdueSchools.length,
+    neverVisited: neverVisitedSchools.length,
+    overdueSchools,
+    dueSchools,
+    neverVisitedSchools,
     recentCancellations,
     cancellationWindowDays: CANCELLATION_WINDOW_DAYS,
     thisWeek,

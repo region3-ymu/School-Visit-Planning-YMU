@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { format } from "date-fns";
 import { useSession } from "next-auth/react";
 import { getDashboardStats, syncExportSheet } from "@/app/actions";
 import { usePlannerStore } from "@/store/plannerStore";
@@ -8,6 +9,7 @@ import { OVERSIGHT_ROLES } from "@/lib/permissions";
 import {
     Building2,
     CalendarX,
+    ChevronDown,
     ClipboardList,
     ClockAlert,
     ExternalLink,
@@ -34,24 +36,59 @@ function StatCard({
     hint,
     icon,
     tone,
+    onClick,
+    expanded,
 }: {
     label: string;
     value: number;
     hint?: string;
     icon: React.ReactNode;
     tone: keyof typeof TONES;
+    /** Set when the card opens the list of schools behind its number. */
+    onClick?: () => void;
+    expanded?: boolean;
 }) {
-    return (
-        <div className="bg-white dark:bg-zinc-900 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-100 dark:border-zinc-800 flex items-center gap-4">
+    const body = (
+        <>
             <div className={`p-3 rounded-lg shrink-0 ${TONES[tone]}`}>{icon}</div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{label}</p>
                 <p className="text-2xl sm:text-3xl font-semibold text-gray-800 dark:text-gray-100">{value}</p>
                 {hint && <p className="text-[11px] text-gray-400 mt-0.5">{hint}</p>}
             </div>
-        </div>
+        </>
+    );
+    const frame =
+        "bg-white dark:bg-zinc-900 p-4 sm:p-6 rounded-xl shadow-sm border flex items-center gap-4 w-full text-left";
+    if (!onClick) {
+        return <div className={`${frame} border-gray-100 dark:border-zinc-800`}>{body}</div>;
+    }
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            aria-expanded={expanded}
+            className={`${frame} transition-colors ${
+                expanded
+                    ? "border-indigo-400 dark:border-indigo-500"
+                    : "border-gray-100 dark:border-zinc-800 hover:border-gray-300 dark:hover:border-zinc-600"
+            }`}
+        >
+            {body}
+            {value > 0 && (
+                <ChevronDown
+                    size={18}
+                    className={`shrink-0 text-gray-400 transition-transform ${expanded ? "rotate-180" : ""}`}
+                />
+            )}
+        </button>
     );
 }
+
+/** Noon, so date-fns names the Miami day without a midnight instant tipping over. */
+const dayLabel = (dayKey: string) => format(new Date(`${dayKey}T12:00:00`), "EEE, MMM d");
+
+type SchoolListKey = "due" | "overdue" | "never";
 
 /**
  * Refresh the export spreadsheet on demand.
@@ -129,6 +166,9 @@ export default function Dashboard({
         dueThisWeek: 0,
         overdue: 0,
         neverVisited: 0,
+        overdueSchools: [] as { id: string; name: string; lastVisitKey: string; daysLate: number }[],
+        dueSchools: [] as { id: string; name: string; dueKey: string }[],
+        neverVisitedSchools: [] as { id: string; name: string }[],
         recentCancellations: 0,
         cancellationWindowDays: 30,
         thisWeek: { inPerson: 0, online: 0, phone: 0, total: 0 },
@@ -138,6 +178,25 @@ export default function Dashboard({
     useEffect(() => {
         getDashboardStats(regionFilter).then(setStats);
     }, [regionFilter]);
+
+    // FR-038 (Carlos Fabre): the cadence cards open the schools behind them.
+    const [openList, setOpenList] = useState<SchoolListKey | null>(null);
+    const toggleList = (key: SchoolListKey) => setOpenList((cur) => (cur === key ? null : key));
+
+    const listRows: { id: string; name: string; detail: string | null }[] =
+        openList === "overdue"
+            ? stats.overdueSchools.map((s) => ({
+                  id: s.id,
+                  name: s.name,
+                  detail: `${s.daysLate === 0 ? "Due today" : `${s.daysLate} day${s.daysLate === 1 ? "" : "s"} late`} · last in person ${dayLabel(s.lastVisitKey)}`,
+              }))
+            : openList === "due"
+              ? stats.dueSchools.map((s) => ({ id: s.id, name: s.name, detail: `Due ${dayLabel(s.dueKey)}` }))
+              : openList === "never"
+                ? stats.neverVisitedSchools.map((s) => ({ id: s.id, name: s.name, detail: null }))
+                : [];
+    const listTitle =
+        openList === "overdue" ? "Overdue schools" : openList === "due" ? "Due this week" : "Never visited";
 
     const { data: session } = useSession();
     const role = session?.user?.role;
@@ -178,6 +237,8 @@ export default function Dashboard({
                     hint="Falls due before Sunday"
                     icon={<ClipboardList size={24} />}
                     tone="amber"
+                    onClick={() => toggleList("due")}
+                    expanded={openList === "due"}
                 />
                 <StatCard
                     label="Overdue"
@@ -185,6 +246,8 @@ export default function Dashboard({
                     hint="Past its interval"
                     icon={<ClockAlert size={24} />}
                     tone="red"
+                    onClick={() => toggleList("overdue")}
+                    expanded={openList === "overdue"}
                 />
                 {/* The number that was missing entirely. A school nobody has ever
                     walked into does not show up as "overdue" — it has no last
@@ -196,8 +259,32 @@ export default function Dashboard({
                     hint="No in-person visit on record"
                     icon={<MapPinOff size={24} />}
                     tone="slate"
+                    onClick={() => toggleList("never")}
+                    expanded={openList === "never"}
                 />
             </div>
+
+            {openList && (
+                <div className="mt-4 bg-white dark:bg-zinc-900 rounded-xl shadow-sm border border-gray-100 dark:border-zinc-800 p-4 sm:p-6">
+                    <h3 className="font-semibold text-gray-800 dark:text-gray-100">
+                        {listTitle} ({listRows.length})
+                    </h3>
+                    {listRows.length === 0 ? (
+                        <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">None right now.</p>
+                    ) : (
+                        <ul className="mt-3 divide-y divide-gray-100 dark:divide-zinc-800">
+                            {listRows.map((row) => (
+                                <li key={row.id} className="py-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                                    <span className="text-sm font-medium text-gray-800 dark:text-gray-100 min-w-0">{row.name}</span>
+                                    {row.detail && (
+                                        <span className="text-xs text-gray-500 dark:text-gray-400">{row.detail}</span>
+                                    )}
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
 
             <div className="mt-4 sm:mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
                 {/* Visits, not schools: the same school twice in a week is two
