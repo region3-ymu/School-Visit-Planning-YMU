@@ -42,8 +42,9 @@ const prisma = new PrismaClient();
 
 const REVIEW_CSV = path.resolve("ymua-import-review.csv");
 
-// Not a school — YMU-A's own office, used there as a GPS test fixture.
-const EXCLUDED_NAMES = new Set(["YMU OFFICE TESTING"]);
+// Not schools — YMU-A's own office, used there as a GPS test fixture, and
+// the demo-mode site, which exists only to drive YMU-A's walkthrough.
+const EXCLUDED_NAMES = new Set(["YMU OFFICE TESTING", "YMU DEMO SITE"]);
 
 type YmuaSchool = {
   id: string;
