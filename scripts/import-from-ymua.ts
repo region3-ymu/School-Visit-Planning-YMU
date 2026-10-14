@@ -33,7 +33,12 @@ import { PrismaClient } from "@prisma/client";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
-import { normalizeSchoolName } from "../src/lib/schoolNames";
+import {
+  applyYmuaImport,
+  fetchYmuaRoster,
+  planYmuaImport,
+  type YmuaSchool,
+} from "../src/lib/ymuaImport";
 
 dotenv.config();
 dotenv.config({ path: ".env.local" });
@@ -41,20 +46,6 @@ dotenv.config({ path: ".env.local" });
 const prisma = new PrismaClient();
 
 const REVIEW_CSV = path.resolve("ymua-import-review.csv");
-
-// Not schools — YMU-A's own office, used there as a GPS test fixture, and
-// the demo-mode site, which exists only to drive YMU-A's walkthrough.
-const EXCLUDED_NAMES = new Set(["YMU OFFICE TESTING", "YMU DEMO SITE"]);
-
-type YmuaSchool = {
-  id: string;
-  name: string;
-  address: string | null;
-  lat: number | null;
-  lng: number | null;
-  region: string | null;
-  google_calendar_id: string | null;
-};
 
 function parseArgs(argv: string[]) {
   const args = argv.slice(2);
@@ -94,145 +85,24 @@ function loadFromFile(file: string): YmuaSchool[] {
   return parsed as YmuaSchool[];
 }
 
-/**
- * US ZIP out of a free-text address; the column is non-null with a "" default.
- * Anchored to the END of the string: the street number ("12829 SW 272nd St,
- * ...") is just as often 5 digits as the ZIP is, and a match anywhere in the
- * address grabs whichever comes first.
- */
-function extractZip(address: string | null): string {
-  const match = address?.trim().match(/(\d{5})(?:-\d{4})?\s*$/);
-  return match ? match[1] : "";
-}
-
 function csvCell(value: unknown): string {
   const s = value === null || value === undefined ? "" : String(value);
   return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s;
 }
 
-type PlanRow = {
-  action: "create" | "update" | "adopt" | "skip";
-  ymuaId: string;
-  name: string;
-  address: string;
-  region: string;
-  calendar: string;
-  matchedLocal: string;
-  note: string;
-  /** Present for update/adopt. */
-  localId?: string;
-  regionId?: string | null;
-  lat?: number | null;
-  lng?: number | null;
-};
-
 async function main() {
   const { apply, file } = parseArgs(process.argv);
 
-  const roster = file ? loadFromFile(file) : await loadFromSupabase();
+  // A file, else YMU-A's Supabase directly when its key is in .env.local,
+  // else YMU-A's /api/school-roster (the path the nightly cron uses).
+  const roster = file
+    ? loadFromFile(file)
+    : process.env.YMUA_SUPABASE_SERVICE_ROLE_KEY
+      ? await loadFromSupabase()
+      : await fetchYmuaRoster();
   console.log(`Loaded ${roster.length} schools from YMU-A${file ? ` (${file})` : ""}.`);
 
-  const regions = await prisma.region.findMany({ select: { id: true, code: true } });
-  const regionByCode = new Map(regions.map((r) => [r.code, r.id]));
-
-  const localSchools = await prisma.school.findMany({
-    select: { id: true, name: true, externalId: true, active: true },
-  });
-  const byExternalId = new Map(
-    localSchools.filter((s) => s.externalId).map((s) => [s.externalId as string, s])
-  );
-
-  // Only schools not yet claimed by an import are adoptable. Group by
-  // normalized name first: this database already holds duplicate pairs (an
-  // active school carrying all the visits and class sessions, plus a
-  // zero-data inactive twin), so "one name, one row" cannot be assumed.
-  const unclaimedGroups = new Map<string, typeof localSchools>();
-  for (const school of localSchools) {
-    if (school.externalId) continue;
-    const key = normalizeSchoolName(school.name);
-    if (!unclaimedGroups.has(key)) unclaimedGroups.set(key, []);
-    unclaimedGroups.get(key)!.push(school);
-  }
-
-  const unclaimedByName = new Map<string, { id: string; name: string }>();
-  for (const [key, group] of unclaimedGroups) {
-    // With duplicates, the active row is the real one — it is where the visit
-    // history hangs. Adopting the inactive twin would strand that history.
-    const candidates = group.length === 1 ? group : group.filter((s) => s.active);
-    unclaimedByName.set(
-      key,
-      candidates.length === 1
-        ? { id: candidates[0].id, name: candidates[0].name }
-        : { id: "", name: "AMBIGUOUS" }
-    );
-  }
-
-  const plan: PlanRow[] = [];
-
-  for (const row of roster) {
-    const name = row.name?.trim() ?? "";
-    const normalized = normalizeSchoolName(name);
-    const regionCode = row.region ? row.region.toUpperCase() : "";
-    const regionId = regionCode ? regionByCode.get(regionCode) ?? null : null;
-
-    const base = {
-      ymuaId: row.id,
-      name,
-      address: row.address ?? "",
-      region: regionCode,
-      calendar: row.google_calendar_id ?? "",
-      matchedLocal: "",
-      regionId,
-      lat: row.lat,
-      lng: row.lng,
-    };
-
-    if (!name || EXCLUDED_NAMES.has(normalized)) {
-      plan.push({ ...base, action: "skip", note: "Not a real school — excluded." });
-      continue;
-    }
-    if (regionCode && !regionId) {
-      plan.push({
-        ...base,
-        action: "skip",
-        note: `No Region row with code ${regionCode} — run npm run db:seed first.`,
-      });
-      continue;
-    }
-    if (row.lat === null || row.lng === null) {
-      plan.push({ ...base, action: "skip", note: "No coordinates in YMU-A — would break routing." });
-      continue;
-    }
-
-    const existing = byExternalId.get(row.id);
-    if (existing) {
-      plan.push({ ...base, action: "update", localId: existing.id, matchedLocal: existing.name, note: "" });
-      continue;
-    }
-
-    const adoptable = unclaimedByName.get(normalized);
-    if (adoptable && adoptable.id) {
-      unclaimedByName.delete(normalized);
-      plan.push({
-        ...base,
-        action: "adopt",
-        localId: adoptable.id,
-        matchedLocal: adoptable.name,
-        note: "Existing local school claimed by normalized-name match.",
-      });
-      continue;
-    }
-    if (adoptable && !adoptable.id) {
-      plan.push({
-        ...base,
-        action: "create",
-        note: "Two local schools share this normalized name — creating instead of adopting; dedupe by hand.",
-      });
-      continue;
-    }
-
-    plan.push({ ...base, action: "create", note: "" });
-  }
+  const plan = await planYmuaImport(prisma, roster);
 
   const header = "action,ymua_id,name,address,region,calendar,matched_local,note";
   const lines = plan.map((r) =>
@@ -256,44 +126,7 @@ async function main() {
     return;
   }
 
-  let created = 0;
-  let updated = 0;
-  const failures: string[] = [];
-
-  for (const row of plan) {
-    if (row.action === "skip") continue;
-
-    const data = {
-      name: row.name,
-      address: row.address || null,
-      zipCode: extractZip(row.address || null),
-      lat: row.lat ?? null,
-      lng: row.lng ?? null,
-      geocodeSource: "ymu-a",
-      regionId: row.regionId ?? null,
-      googleCalendarId: row.calendar || null,
-      active: true,
-    };
-
-    // One bad row must not abandon the import halfway through, leaving the
-    // roster half-imported with no record of where it stopped.
-    try {
-      if (row.action === "create") {
-        await prisma.school.create({ data: { ...data, externalId: row.ymuaId } });
-        created += 1;
-      } else {
-        if (!row.localId) throw new Error("internal: no local school id to update");
-        await prisma.school.update({
-          where: { id: row.localId },
-          data: { ...data, externalId: row.ymuaId },
-        });
-        updated += 1;
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      failures.push(`${row.name}: ${message}`);
-    }
-  }
+  const { created, updated, failures } = await applyYmuaImport(prisma, plan);
 
   console.log(`\nApplied: ${created} created, ${updated} updated.`);
   if (failures.length) {

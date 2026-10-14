@@ -47,7 +47,7 @@ export const UPDATES: UpdateEntry[] = [
       },
       {
         module: "Schools",
-        text: "Added Glades Middle School, Southwest Miami Sr. High, Rockway Middle School and Cypress K-8.",
+        text: "Added Glades Middle School, Southwest Miami Sr. High, Rockway Middle School and Cypress K-8. From now on, a school added in YMU-A appears here the next morning on its own.",
       },
     ],
   },
