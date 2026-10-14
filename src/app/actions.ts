@@ -2803,7 +2803,12 @@ const calendarVisitInput = z.object({
  * everything that ends up on the event (school name, address) is read here,
  * and the calendar written to is always the session's own.
  */
-export async function sendWeekToGoogleCalendar(weekKey: string, rawVisits: unknown) {
+export async function sendWeekToGoogleCalendar(
+  weekKey: string,
+  rawVisits: unknown,
+  /** What this send covers: the week (default), one day, or one visit. */
+  scope: { kind: "week" } | { kind: "day"; dayKey: string } | { kind: "visit" } = { kind: "week" },
+) {
   const session = await auth();
   const user = requireUser(session);
   if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role does not plan visits");
@@ -2816,7 +2821,18 @@ export async function sendWeekToGoogleCalendar(weekKey: string, rawVisits: unkno
   if (!parsed.success) return { ok: false as const, error: "The plan sent was not readable." };
 
   const weekDays = new Set(Array.from({ length: 7 }, (_, i) => addDaysToDayKey(weekKey, i)));
-  const visits = parsed.data.filter((v) => weekDays.has(v.dayKey));
+  const visits = parsed.data.filter(
+    (v) => weekDays.has(v.dayKey) && (scope.kind !== "day" || v.dayKey === scope.dayKey),
+  );
+  if (scope.kind === "visit" && visits.length !== 1) {
+    return { ok: false as const, error: "Pick one visit to send." };
+  }
+  if (scope.kind === "day" && !weekDays.has(scope.dayKey)) {
+    return { ok: false as const, error: "That day is not in this week." };
+  }
+  // Removal follows the scope — see syncWeekToCalendar.
+  const removeWithinDays: Set<string> =
+    scope.kind === "week" ? weekDays : scope.kind === "day" ? new Set([scope.dayKey]) : new Set();
 
   const schools = await prisma.school.findMany({
     where: { id: { in: [...new Set(visits.map((v) => v.schoolId))] } },
@@ -2853,5 +2869,5 @@ export async function sendWeekToGoogleCalendar(weekKey: string, rawVisits: unkno
     ];
   });
 
-  return syncWeekToCalendar(user.email, weekKey, calendarVisits);
+  return syncWeekToCalendar(user.email, weekKey, calendarVisits, removeWithinDays);
 }

@@ -93,11 +93,17 @@ function eventBody(visit: CalendarVisit, weekKey: string) {
  * new visits are added, ones already sent are updated in place, and ones
  * sent before but no longer in the plan are removed. Only events this app
  * created for that week are ever read, changed or deleted.
+ *
+ * `removeWithinDays` bounds the removal (FR-043 follow-up: export a whole
+ * week, one day, or one visit). The week passes every day; one day passes
+ * just that day, so Tuesday's events are never touched by sending Monday;
+ * one visit passes an empty set, which only ever adds or updates.
  */
 export async function syncWeekToCalendar(
   email: string,
   weekKey: string,
   visits: CalendarVisit[],
+  removeWithinDays: ReadonlySet<string>,
 ): Promise<SendResult> {
   let token: string;
   try {
@@ -142,8 +148,10 @@ export async function syncWeekToCalendar(
       }
     }
 
-    // Whatever is left was sent before and is no longer planned.
-    for (const stale of byKey.values()) {
+    // Whatever is left was sent before and is no longer planned — within the
+    // days this send is about. The key is schoolId|dayKey|startTime.
+    for (const [key, stale] of byKey) {
+      if (!removeWithinDays.has(key.split("|")[1] ?? "")) continue;
       await call(token, `${API}/${encodeURIComponent(stale.id)}`, { method: "DELETE" });
       removed += 1;
     }

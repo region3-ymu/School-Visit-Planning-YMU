@@ -81,10 +81,12 @@ export default function WeeklyPlanner({
         { status: "idle" | "sending" } | { status: "done"; text: string } | { status: "error"; text: string }
     >({ status: "idle" });
 
-    const sendToCalendar = async () => {
+    type CalendarScope = { kind: "week" } | { kind: "day"; dayKey: string } | { kind: "visit"; visit: VisitInfo };
+    const sendToCalendar = async (scope: CalendarScope = { kind: "week" }) => {
         const hhmm = /^\d{2}:\d{2}$/;
-        const visits = plannedVisits
+        const visits = (scope.kind === "visit" ? [scope.visit] : plannedVisits)
             .filter((v) => !v.isSkipped && weekDayKeys.includes(dayKeyOf(v.date)))
+            .filter((v) => scope.kind !== "day" || dayKeyOf(v.date) === scope.dayKey)
             .map((v) => {
                 const startTime = v.startTime && hhmm.test(v.startTime) ? v.startTime : v.classStartTime;
                 const endTime = v.endTime && hhmm.test(v.endTime) ? v.endTime : v.classEndTime;
@@ -99,19 +101,35 @@ export default function WeeklyPlanner({
             })
             .filter((v): v is typeof v & { startTime: string } => !!v.startTime && hhmm.test(v.startTime));
         if (visits.length === 0) {
-            setCalendarSend({ status: "error", text: "There are no visits with a time this week to send." });
+            setCalendarSend({
+                status: "error",
+                text:
+                    scope.kind === "visit"
+                        ? "That visit has no time yet, so it can't go on a calendar."
+                        : `There are no visits with a time ${scope.kind === "day" ? "that day" : "this week"} to send.`,
+            });
             return;
         }
         setCalendarSend({ status: "sending" });
         try {
-            const result = await sendWeekToGoogleCalendar(weekStartKey, visits);
+            const result = await sendWeekToGoogleCalendar(
+                weekStartKey,
+                visits,
+                scope.kind === "visit" ? { kind: "visit" } : scope,
+            );
             if (result.ok) {
                 const parts = [
                     result.created && `${result.created} added`,
                     result.updated && `${result.updated} updated`,
                     result.removed && `${result.removed} removed`,
                 ].filter(Boolean);
-                setCalendarSend({ status: "done", text: `Sent to your Google Calendar: ${parts.join(", ") || "nothing changed"}.` });
+                const what =
+                    scope.kind === "visit"
+                        ? scope.visit.schoolName
+                        : scope.kind === "day"
+                          ? format(labelDateFor(scope.dayKey), "EEEE, MMM d")
+                          : "this week";
+                setCalendarSend({ status: "done", text: `Sent ${what} to your Google Calendar: ${parts.join(", ") || "nothing changed"}.` });
             } else {
                 setCalendarSend({ status: "error", text: result.error });
             }
@@ -597,7 +615,7 @@ export default function WeeklyPlanner({
                     {canPlan && (
                         <button
                             type="button"
-                            onClick={sendToCalendar}
+                            onClick={() => sendToCalendar()}
                             disabled={loading || calendarSend.status === "sending"}
                             className="flex items-center space-x-2 border border-indigo-200 dark:border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
                             title="Add this week's visits to your Google Calendar"
@@ -695,6 +713,19 @@ export default function WeeklyPlanner({
                                     <p className="text-xs text-gray-400">{format(day, "MMM d")}</p>
 
                                 </div>
+
+                                {canPlan && dayVisits.some((v) => !v.isSkipped) && (
+                                    <button
+                                        type="button"
+                                        onClick={() => sendToCalendar({ kind: "day", dayKey: formattedDate })}
+                                        disabled={loading || calendarSend.status === "sending"}
+                                        title={`Send ${format(day, "EEEE")} to Google Calendar`}
+                                        aria-label={`Send ${format(day, "EEEE")} to Google Calendar`}
+                                        className="p-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center text-indigo-600 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-500/10 rounded-lg transition-colors disabled:opacity-50"
+                                    >
+                                        <CalendarPlus size={18} />
+                                    </button>
+                                )}
 
 
                             </div>
@@ -935,6 +966,17 @@ export default function WeeklyPlanner({
 
                                                                 <CalendarDays size={16} />
 
+                                                            </button>
+
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => sendToCalendar({ kind: "visit", visit })}
+                                                                disabled={loading || calendarSend.status === "sending"}
+                                                                title="Add to Google Calendar"
+                                                                aria-label={`Add ${visit.schoolName} to Google Calendar`}
+                                                                className="p-1.5 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center text-indigo-600 bg-indigo-50 hover:bg-indigo-100 dark:text-indigo-300 dark:bg-indigo-500/10 dark:hover:bg-indigo-500/20 rounded-lg transition-colors disabled:opacity-50"
+                                                            >
+                                                                <CalendarPlus size={16} />
                                                             </button>
 
                                                             <button
