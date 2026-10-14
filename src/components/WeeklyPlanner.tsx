@@ -266,6 +266,23 @@ export default function WeeklyPlanner({
     const handleOpenPostpone = (schoolId: string, visitDate: Date, schoolName: string, viableOptions: ViableOption[]) => {
 
         setPostponeModalData({ schoolId, visitDate, schoolName, viableOptions });
+        // The options a visit carries were worked out when the week was
+        // planned. Weeks are kept as planned (#52) and classes now arrive from
+        // YMU-A within minutes (#53), so a class added afterwards — Orchard
+        // Villa's Friday, 2026-10-14 — was missing here. Open with what the
+        // plan had, then swap in the school's options as they are now, the
+        // same call "add a visit" makes.
+        void getSchoolOptionsForWeek(schoolId, weekStartKey)
+            .then((fresh) => {
+                setPostponeModalData((open) =>
+                    open && open.schoolId === schoolId && dayKeyOf(open.visitDate) === dayKeyOf(visitDate)
+                        ? { ...open, viableOptions: fresh }
+                        : open,
+                );
+            })
+            .catch(() => {
+                // Keep the planned options; better than an empty modal.
+            });
 
     };
 
