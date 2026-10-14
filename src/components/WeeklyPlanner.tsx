@@ -46,7 +46,7 @@ export default function WeeklyPlanner({
     canPlan?: boolean;
 }) {
 
-    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, plannedFor, setPlan, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
+    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, plannedFor, setPlan, planCache, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
 
     const weekStartDate = new Date(weekStartDateStr);
     // Sent to the server as a plain calendar date. An ISO instant would be
@@ -461,6 +461,14 @@ export default function WeeklyPlanner({
             // manual change, so that became the habit.
             if (plannedFor === planKey && plannedVisits.length > 0) return;
 
+            // #52: this week was already planned on this device — put it back
+            // exactly as it was left instead of planning it again.
+            const cached = planCache[planKey];
+            if (cached && cached.visits.length > 0) {
+                setPlan(cached.visits, planKey);
+                return;
+            }
+
             setLoading(true);
 
             const plan = await getWeeklyPlan(weekStartKey, manualOverrides, maxVisitsPerWeek, maxVisitsPerDay, regionFilter);
@@ -860,7 +868,10 @@ export default function WeeklyPlanner({
 
 
 
-                                                <div className="flex justify-between items-start mt-3">
+                                                {/* Notes above, actions below, always. Side by side, the
+                                                    fifth button (Add to Google Calendar) pushed the row past
+                                                    the card's edge on a phone (#51). */}
+                                                <div className="flex flex-col gap-2 mt-3">
 
                                                     <div className="flex flex-col space-y-1.5 pt-1">
 
@@ -924,7 +935,7 @@ export default function WeeklyPlanner({
 
                                                     {canPlan && !visit.isCompleted && (
 
-                                                        <div className="flex space-x-2">
+                                                        <div className="flex flex-wrap gap-2">
 
                                                             <button
 

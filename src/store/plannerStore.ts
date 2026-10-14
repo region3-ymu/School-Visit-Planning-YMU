@@ -41,6 +41,17 @@ interface PlannerState {
     plannedFor: string | null;
     setPlan: (visits: VisitInfo[], plannedFor: string) => void;
 
+    /**
+     * Every week the planner has shown, by the same key as plannedFor (#52,
+     * Emilio Medrano, 2026-10-14). There used to be ONE cached plan: stepping
+     * back a week replaced this week's, and stepping forward again
+     * recomputed it from scratch — the hand edits came back (they live in
+     * manualOverrides), but the rest of the arrangement the RM had settled on
+     * did not. Now each week keeps its own copy, and only Recalculate (or a
+     * change of region or targets, which is a different key) replaces it.
+     */
+    planCache: Record<string, { visits: VisitInfo[]; savedAt: number }>;
+
     manualOverrides: Partial<VisitInfo>[];
     addOverride: (override: Partial<VisitInfo>) => void;
     clearOverrides: () => void;
@@ -53,6 +64,8 @@ interface PlannerState {
 }
 
 const OVERRIDE_RETENTION_DAYS = 14;
+const PLAN_CACHE_RETENTION_DAYS = 21;
+const PLAN_CACHE_MAX_WEEKS = 8;
 
 export const usePlannerStore = create<PlannerState>()(
     persist(
@@ -68,10 +81,23 @@ export const usePlannerStore = create<PlannerState>()(
             setWeekStartDate: (date) => set({ weekStartDateStr: date.toISOString() }),
 
             plannedVisits: [],
-            setPlannedVisits: (visits) => set({ plannedVisits: visits }),
+            // Edits to the plan on screen are kept in that week's cache too, so
+            // leaving the week and coming back finds them.
+            setPlannedVisits: (visits) => set((state) => ({
+                plannedVisits: visits,
+                planCache: state.plannedFor
+                    ? { ...state.planCache, [state.plannedFor]: { visits, savedAt: Date.now() } }
+                    : state.planCache,
+            })),
 
             plannedFor: null,
-            setPlan: (visits, plannedFor) => set({ plannedVisits: visits, plannedFor }),
+            setPlan: (visits, plannedFor) => set((state) => ({
+                plannedVisits: visits,
+                plannedFor,
+                planCache: { ...state.planCache, [plannedFor]: { visits, savedAt: Date.now() } },
+            })),
+
+            planCache: {},
 
             manualOverrides: [],
             addOverride: (override) => set((state) => {
@@ -138,6 +164,7 @@ export const usePlannerStore = create<PlannerState>()(
                 manualOverrides: state.manualOverrides,
                 plannedVisits: state.plannedVisits,
                 plannedFor: state.plannedFor,
+                planCache: state.planCache,
                 weekStartDateStr: state.weekStartDateStr,
                 maxVisitsPerWeek: state.maxVisitsPerWeek,
                 maxVisitsPerDay: state.maxVisitsPerDay,
@@ -150,7 +177,16 @@ export const usePlannerStore = create<PlannerState>()(
                     if (!o.date) return false;
                     return new Date(o.date) >= cutoff;
                 });
-                return { ...current, ...p, manualOverrides: freshOverrides };
+                // Keep the weeks worth coming back to: touched in the last 3
+                // weeks, at most 8 of them — localStorage is not unlimited.
+                const cacheCutoff = Date.now() - PLAN_CACHE_RETENTION_DAYS * 86_400_000;
+                const planCache = Object.fromEntries(
+                    Object.entries(p.planCache ?? {})
+                        .filter(([, entry]) => entry && entry.savedAt >= cacheCutoff)
+                        .sort((a, b) => b[1].savedAt - a[1].savedAt)
+                        .slice(0, PLAN_CACHE_MAX_WEEKS),
+                );
+                return { ...current, ...p, manualOverrides: freshOverrides, planCache };
             },
         }
     )

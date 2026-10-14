@@ -27,6 +27,10 @@ export const UPDATES: UpdateEntry[] = [
     items: [
       {
         module: "Weekly Planner",
+        text: "Moving to another week and back no longer re-plans the week you had set up — each week stays as you left it until you press Recalculate. The buttons on each visit card also fit on a phone screen now.",
+      },
+      {
+        module: "Weekly Planner",
         text: "Send your planned visits to your own Google Calendar: the whole week, one day, or a single visit. Sending again updates them and removes visits you took out of the plan — it never touches anything else in your calendar.",
       },
       {
