@@ -23,6 +23,35 @@ export type UpdateEntry = {
 
 export const UPDATES: UpdateEntry[] = [
   {
+    date: "2026-10-14",
+    items: [
+      {
+        module: "Weekly Planner",
+        text: "Send your planned visits to your own Google Calendar: the whole week, one day, or a single visit. Sending again updates them and removes visits you took out of the plan — it never touches anything else in your calendar.",
+      },
+      {
+        module: "Dashboard",
+        text: "\"Log a visit\" opens the visit form in one tap, and Overdue, Due This Week and Never Visited now open the list of schools behind the number.",
+      },
+      {
+        module: "Visits",
+        text: "A visit logged by hand today now checks your GPS against the school, the same as confirming a planned visit.",
+      },
+      {
+        module: "Zone Map",
+        text: "Plan a route for any day, this week or later, with the arrows next to the day picker.",
+      },
+      {
+        module: "Report a problem",
+        text: "Attach a screenshot to your report, and send another one without reloading.",
+      },
+      {
+        module: "Schools",
+        text: "Added Glades Middle School, Southwest Miami Sr. High, Rockway Middle School and Cypress K-8.",
+      },
+    ],
+  },
+  {
     date: "2026-09-22",
     items: [
       { module: "Visits", text: "The observation note is required when the visit included the YMU teacher." },
