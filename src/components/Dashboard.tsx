@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { format } from "date-fns";
 import { useSession } from "next-auth/react";
-import { getDashboardStats, syncExportSheet } from "@/app/actions";
+import { getDashboardStats, syncExportSheet, refreshClasses } from "@/app/actions";
 import { usePlannerStore } from "@/store/plannerStore";
 import { OVERSIGHT_ROLES } from "@/lib/permissions";
 import {
@@ -178,6 +178,18 @@ export default function Dashboard({
     useEffect(() => {
         getDashboardStats(regionFilter).then(setStats);
     }, [regionFilter]);
+
+    // #53: keep classes fresh from YMU-A — throttled server-side to once every
+    // 5 minutes across everyone, so opening the dashboard costs nothing extra.
+    // Stats are recounted only if something actually changed.
+    useEffect(() => {
+        void refreshClasses(false).then((res) => {
+            if (res.ok && !res.result.skipped && res.result.created + res.result.updated + res.result.removed > 0) {
+                getDashboardStats(regionFilter).then(setStats);
+            }
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     // FR-038 (Carlos Fabre): the cadence cards open the schools behind them.
     const [openList, setOpenList] = useState<SchoolListKey | null>(null);

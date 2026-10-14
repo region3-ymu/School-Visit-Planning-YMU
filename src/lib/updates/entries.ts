@@ -30,6 +30,10 @@ export const UPDATES: UpdateEntry[] = [
         text: "Moving to another week and back no longer re-plans the week you had set up — each week stays as you left it until you press Recalculate. The buttons on each visit card also fit on a phone screen now.",
       },
       {
+        module: "Classes",
+        text: "Classes now come from YMU-A, which reads the school calendars every 5 minutes — a class added in Google Calendar reaches the planner within minutes instead of the next morning, with its real teacher. \"Refresh classes\" on the Weekly Planner fetches them right away.",
+      },
+      {
         module: "Weekly Planner",
         text: "Send your planned visits to your own Google Calendar: the whole week, one day, or a single visit. Sending again updates them and removes visits you took out of the plan — it never touches anything else in your calendar.",
       },

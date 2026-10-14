@@ -471,3 +471,16 @@ model ProgramScheduleNote {
 
   @@index([schoolId])
 }
+
+/// Where a background sync left off, by name (#53). One row per feed —
+/// today just "ymua-class-feed": the cursor into YMU-A's class feed, the end
+/// of the window it last covered (so a week newly entering the window is
+/// fetched in full), and when it last ran (the 5-minute throttle).
+model SyncState {
+  key        String    @id
+  cursor     String?
+  windowEnd  DateTime?
+  lastRunAt  DateTime?
+  lastResult String?
+  updatedAt  DateTime  @updatedAt
+}

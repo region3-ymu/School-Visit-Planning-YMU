@@ -35,6 +35,7 @@ import {
 import { syncDatasetToSheet } from "@/lib/export/syncSheet";
 import { haversineMeters } from "@/lib/geo";
 import { syncWeekToCalendar } from "@/lib/google/personalCalendar";
+import { pullClassesFromYmua } from "@/lib/ymuaClassFeed";
 import {
   APP_TIME_ZONE,
   dayKeyInAppZone,
@@ -2870,4 +2871,22 @@ export async function sendWeekToGoogleCalendar(
   });
 
   return syncWeekToCalendar(user.email, weekKey, calendarVisits, removeWithinDays);
+}
+
+// ─── Classes from YMU-A (#53) ────────────────────────────────────────────────
+
+/**
+ * Bring SVP's classes up to date from YMU-A. Called quietly when the planner
+ * or dashboard opens (throttled to once every 5 minutes across everyone) and
+ * by the "Refresh classes" button with force.
+ */
+export async function refreshClasses(force = false) {
+  const session = await auth();
+  requireUser(session);
+  try {
+    return { ok: true as const, result: await pullClassesFromYmua(prisma, { force }) };
+  } catch (err) {
+    console.error("refreshClasses:", err);
+    return { ok: false as const, error: err instanceof Error ? err.message : "Couldn't reach YMU-A." };
+  }
 }

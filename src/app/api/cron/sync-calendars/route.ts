@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { syncAllSchoolCalendars, getDefaultSyncRange } from "@/modules/calendarSync";
+import { pullClassesFromYmua } from "@/lib/ymuaClassFeed";
 import { applyYmuaImport, fetchYmuaRoster, planYmuaImport } from "@/lib/ymuaImport";
 
 /**
@@ -30,10 +30,11 @@ export async function GET(request: NextRequest) {
     roster = { error: err instanceof Error ? err.message : "Roster import failed" };
   }
 
+  // Classes now come from YMU-A's mirror (#53), not from Google directly —
+  // this daily run is only the backstop for the pulls the planner makes.
   try {
-    const { start, end } = getDefaultSyncRange();
-    const result = await syncAllSchoolCalendars(prisma, start, end);
-    return NextResponse.json({ ...result, roster });
+    const classes = await pullClassesFromYmua(prisma, { force: true });
+    return NextResponse.json({ classes, roster });
   } catch (err) {
     console.error("cron calendar sync error:", err);
     const message = err instanceof Error ? err.message : "Sync failed";

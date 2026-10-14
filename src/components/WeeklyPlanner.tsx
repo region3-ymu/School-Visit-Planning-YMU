@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit, sendWeekToGoogleCalendar } from "@/app/actions";
+import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit, sendWeekToGoogleCalendar, refreshClasses } from "@/app/actions";
 
 import { usePlannerStore } from "@/store/plannerStore";
 
@@ -77,6 +77,53 @@ export default function WeeklyPlanner({
 
     // FR-043 (Eric Levy): put the week's visits in the RM's own Google
     // Calendar. Re-sending the same week updates it rather than duplicating.
+    // #53: classes come from YMU-A. Pulled quietly when the planner opens
+    // (the server throttles it to once every 5 minutes across everyone), and
+    // on demand with "Refresh classes".
+    const [classRefresh, setClassRefresh] = useState<
+        { status: "idle" | "refreshing" } | { status: "done" | "error"; text: string }
+    >({ status: "idle" });
+
+    const describeClassChanges = (r: { created: number; updated: number; removed: number }) => {
+        const parts = [
+            r.created && `${r.created} new`,
+            r.updated && `${r.updated} changed`,
+            r.removed && `${r.removed} removed`,
+        ].filter(Boolean);
+        return parts.length
+            ? `Classes updated from YMU-A: ${parts.join(", ")}. Your planned week stays as you left it — add a visit by hand, or Recalculate to re-plan with them.`
+            : "Classes are up to date with YMU-A.";
+    };
+
+    const handleRefreshClasses = async () => {
+        setClassRefresh({ status: "refreshing" });
+        const res = await refreshClasses(true);
+        if (!res.ok) {
+            setClassRefresh({ status: "error", text: `Couldn't refresh classes: ${res.error}` });
+            return;
+        }
+        setClassRefresh(
+            res.result.skipped
+                ? { status: "done", text: "Classes are up to date with YMU-A." }
+                : { status: "done", text: describeClassChanges(res.result) },
+        );
+    };
+
+    useEffect(() => {
+        let alive = true;
+        void refreshClasses(false).then((res) => {
+            if (!alive || !res.ok || res.result.skipped) return;
+            const r = res.result;
+            if (r.created + r.updated + r.removed > 0) {
+                setClassRefresh({ status: "done", text: describeClassChanges(r) });
+            }
+        });
+        return () => {
+            alive = false;
+        };
+        // Once per visit to the planner; the server decides whether to fetch.
+    }, []);
+
     const [calendarSend, setCalendarSend] = useState<
         { status: "idle" | "sending" } | { status: "done"; text: string } | { status: "error"; text: string }
     >({ status: "idle" });
@@ -620,6 +667,19 @@ export default function WeeklyPlanner({
 
                     )}
 
+                    <button
+                        type="button"
+                        onClick={handleRefreshClasses}
+                        disabled={classRefresh.status === "refreshing"}
+                        className="flex items-center space-x-2 border border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-zinc-800 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                        title="Get the latest classes from YMU-A now"
+                    >
+                        <RefreshCw size={18} className={classRefresh.status === "refreshing" ? "animate-spin" : ""} />
+                        <span className="hidden sm:inline">
+                            {classRefresh.status === "refreshing" ? "Refreshing…" : "Refresh classes"}
+                        </span>
+                    </button>
+
                     {canPlan && (
                         <button
                             type="button"
@@ -675,6 +735,19 @@ export default function WeeklyPlanner({
             </div>
 
 
+
+            {(classRefresh.status === "done" || classRefresh.status === "error") && (
+                <p
+                    role={classRefresh.status === "error" ? "alert" : "status"}
+                    className={`mb-4 rounded-lg p-3 text-sm ${
+                        classRefresh.status === "done"
+                            ? "bg-sky-50 text-sky-800 dark:bg-sky-500/10 dark:text-sky-300"
+                            : "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
+                    }`}
+                >
+                    {classRefresh.text}
+                </p>
+            )}
 
             {(calendarSend.status === "done" || calendarSend.status === "error") && (
                 <p
