@@ -121,7 +121,8 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 async function signJwt(
   serviceAccount: GoogleServiceAccount,
-  scope: string = CALENDAR_SCOPE
+  scope: string = CALENDAR_SCOPE,
+  subject?: string
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const encoder = new TextEncoder();
@@ -136,6 +137,11 @@ async function signJwt(
         aud: serviceAccount.token_uri ?? GOOGLE_TOKEN_AUDIENCE,
         iat: now,
         exp: now + 60 * 60,
+        // Domain-wide delegation: act as this Workspace user. Only honoured
+        // once a Workspace super admin has authorised the service account's
+        // client id for this scope; until then Google answers 401
+        // unauthorized_client, which callers turn into a sentence.
+        ...(subject ? { sub: subject } : {}),
       })
     )
   );
@@ -229,7 +235,9 @@ export function parseServiceAccount(base64Json: string): GoogleServiceAccount {
 
 export async function getGoogleAccessToken(
   serviceAccount: GoogleServiceAccount,
-  scope: string = CALENDAR_SCOPE
+  scope: string = CALENDAR_SCOPE,
+  /** A Workspace user to impersonate (domain-wide delegation), if any. */
+  subject?: string
 ): Promise<string> {
   // Reuse a token until it is within five minutes of expiry. Keyed by scope so
   // a token minted for one scope is never handed to a call needing another.
@@ -238,7 +246,9 @@ export async function getGoogleAccessToken(
   // and a different account reads the school calendars — and a cache that
   // cannot tell them apart would eventually hand one account's token to a call
   // made on behalf of the other.
-  const cacheKey = `${serviceAccount.client_email}|${scope}`;
+  // And by impersonated user: a token minted as one RM must never write to
+  // another RM's calendar.
+  const cacheKey = `${serviceAccount.client_email}|${scope}|${subject ?? ""}`;
   if (
     cachedAccessToken &&
     cachedAccessToken.key === cacheKey &&
@@ -247,7 +257,7 @@ export async function getGoogleAccessToken(
     return cachedAccessToken.value;
   }
 
-  const assertion = await signJwt(serviceAccount, scope);
+  const assertion = await signJwt(serviceAccount, scope, subject);
   const response = await fetch(serviceAccount.token_uri ?? GOOGLE_TOKEN_AUDIENCE, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },

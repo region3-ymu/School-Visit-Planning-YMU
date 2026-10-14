@@ -34,6 +34,7 @@ import {
 } from "@/lib/permissions";
 import { syncDatasetToSheet } from "@/lib/export/syncSheet";
 import { haversineMeters } from "@/lib/geo";
+import { syncWeekToCalendar } from "@/lib/google/personalCalendar";
 import {
   APP_TIME_ZONE,
   dayKeyInAppZone,
@@ -2782,4 +2783,75 @@ export async function syncExportSheet() {
     url: `https://docs.google.com/spreadsheets/d/${result.sheetId}/edit`,
     tables: result.tables,
   };
+}
+
+// ─── Weekly plan → the RM's own Google Calendar (FR-043) ────────────────────
+
+const calendarVisitInput = z.object({
+  schoolId: z.string().min(1),
+  dayKey: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  startTime: z.string().regex(/^\d{2}:\d{2}$/),
+  endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  subjectName: z.string().max(200).optional(),
+  teacherName: z.string().max(200).optional(),
+});
+
+/**
+ * Sends the week on the planner's screen to the signed-in user's Google
+ * Calendar. The plan is posted by the client because that is where it lives —
+ * the planner computes it per visit and keeps hand edits in the browser — but
+ * everything that ends up on the event (school name, address) is read here,
+ * and the calendar written to is always the session's own.
+ */
+export async function sendWeekToGoogleCalendar(weekKey: string, rawVisits: unknown) {
+  const session = await auth();
+  const user = requireUser(session);
+  if (!canPlanVisits(user.role)) throw new Error("Forbidden: this role does not plan visits");
+  if (!user.email) return { ok: false as const, error: "Your account has no email address." };
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekKey) || mondayOfDayKey(weekKey) !== weekKey) {
+    return { ok: false as const, error: "That is not the start of a week." };
+  }
+  const parsed = z.array(calendarVisitInput).max(80).safeParse(rawVisits);
+  if (!parsed.success) return { ok: false as const, error: "The plan sent was not readable." };
+
+  const weekDays = new Set(Array.from({ length: 7 }, (_, i) => addDaysToDayKey(weekKey, i)));
+  const visits = parsed.data.filter((v) => weekDays.has(v.dayKey));
+
+  const schools = await prisma.school.findMany({
+    where: { id: { in: [...new Set(visits.map((v) => v.schoolId))] } },
+    select: { id: true, name: true, address: true, zipCode: true },
+  });
+  const schoolById = new Map(schools.map((s) => [s.id, s]));
+
+  const toMinutes = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const fromMinutes = (m: number) =>
+    `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+
+  const calendarVisits = visits.flatMap((v) => {
+    const school = schoolById.get(v.schoolId);
+    if (!school) return [];
+    const start = toMinutes(v.startTime);
+    // A slot with no end, or one that ends before it starts, gets the
+    // planner's standard half hour.
+    const end = v.endTime && toMinutes(v.endTime) > start ? toMinutes(v.endTime) : start + 30;
+    const details = [
+      v.subjectName ? `Class: ${v.subjectName}` : null,
+      v.teacherName ? `Teacher: ${v.teacherName}` : null,
+      "Planned in the YMU Visit Planner. Re-sending the week from the planner updates or removes this event.",
+    ].filter(Boolean);
+    return [
+      {
+        key: `${v.schoolId}|${v.dayKey}|${v.startTime}`,
+        dayKey: v.dayKey,
+        startTime: fromMinutes(start),
+        endTime: fromMinutes(end),
+        summary: `Visit ${school.name} | YMU`,
+        location: school.address?.trim() || null,
+        description: details.join("\n"),
+      },
+    ];
+  });
+
+  return syncWeekToCalendar(user.email, weekKey, calendarVisits);
 }

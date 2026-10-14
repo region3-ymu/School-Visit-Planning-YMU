@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit } from "@/app/actions";
+import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit, sendWeekToGoogleCalendar } from "@/app/actions";
 
 import { usePlannerStore } from "@/store/plannerStore";
 
@@ -16,7 +16,7 @@ import { format, addDays, subDays, startOfWeek } from "date-fns";
 // scheduled late enough in the evening to already be tomorrow in UTC.
 import { addDaysToDayKey, dayKeyInAppZone } from "@/lib/timezone";
 
-import { RefreshCw, MapPin, Clock, CheckCircle, ChevronLeft, ChevronRight, CalendarDays, Trash2, X, AlertCircle } from "lucide-react";
+import { RefreshCw, MapPin, Clock, CheckCircle, ChevronLeft, ChevronRight, CalendarDays, CalendarPlus, Trash2, X, AlertCircle } from "lucide-react";
 
 import { ViableOption, VisitInfo } from "@/lib/types";
 
@@ -74,6 +74,51 @@ export default function WeeklyPlanner({
     const planKey = [weekStartKey, regionFilter ?? "own", maxVisitsPerWeek, maxVisitsPerDay].join("|");
 
     const [loading, setLoading] = useState(false);
+
+    // FR-043 (Eric Levy): put the week's visits in the RM's own Google
+    // Calendar. Re-sending the same week updates it rather than duplicating.
+    const [calendarSend, setCalendarSend] = useState<
+        { status: "idle" | "sending" } | { status: "done"; text: string } | { status: "error"; text: string }
+    >({ status: "idle" });
+
+    const sendToCalendar = async () => {
+        const hhmm = /^\d{2}:\d{2}$/;
+        const visits = plannedVisits
+            .filter((v) => !v.isSkipped && weekDayKeys.includes(dayKeyOf(v.date)))
+            .map((v) => {
+                const startTime = v.startTime && hhmm.test(v.startTime) ? v.startTime : v.classStartTime;
+                const endTime = v.endTime && hhmm.test(v.endTime) ? v.endTime : v.classEndTime;
+                return {
+                    schoolId: v.schoolId,
+                    dayKey: dayKeyOf(v.date),
+                    startTime,
+                    endTime: endTime && hhmm.test(endTime) ? endTime : undefined,
+                    subjectName: v.subjectName,
+                    teacherName: v.teacherName,
+                };
+            })
+            .filter((v): v is typeof v & { startTime: string } => !!v.startTime && hhmm.test(v.startTime));
+        if (visits.length === 0) {
+            setCalendarSend({ status: "error", text: "There are no visits with a time this week to send." });
+            return;
+        }
+        setCalendarSend({ status: "sending" });
+        try {
+            const result = await sendWeekToGoogleCalendar(weekStartKey, visits);
+            if (result.ok) {
+                const parts = [
+                    result.created && `${result.created} added`,
+                    result.updated && `${result.updated} updated`,
+                    result.removed && `${result.removed} removed`,
+                ].filter(Boolean);
+                setCalendarSend({ status: "done", text: `Sent to your Google Calendar: ${parts.join(", ") || "nothing changed"}.` });
+            } else {
+                setCalendarSend({ status: "error", text: result.error });
+            }
+        } catch (e) {
+            setCalendarSend({ status: "error", text: e instanceof Error ? e.message : "Couldn't send the week." });
+        }
+    };
 
 
 
@@ -549,6 +594,21 @@ export default function WeeklyPlanner({
 
                     )}
 
+                    {canPlan && (
+                        <button
+                            type="button"
+                            onClick={sendToCalendar}
+                            disabled={loading || calendarSend.status === "sending"}
+                            className="flex items-center space-x-2 border border-indigo-200 dark:border-indigo-500/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-500/10 px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                            title="Add this week's visits to your Google Calendar"
+                        >
+                            <CalendarPlus size={18} />
+                            <span className="hidden sm:inline">
+                                {calendarSend.status === "sending" ? "Sending…" : "Send to Google Calendar"}
+                            </span>
+                        </button>
+                    )}
+
                     <button
 
                         onClick={() => {
@@ -589,6 +649,19 @@ export default function WeeklyPlanner({
             </div>
 
 
+
+            {(calendarSend.status === "done" || calendarSend.status === "error") && (
+                <p
+                    role={calendarSend.status === "error" ? "alert" : "status"}
+                    className={`mb-4 rounded-lg p-3 text-sm ${
+                        calendarSend.status === "done"
+                            ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-300"
+                            : "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300"
+                    }`}
+                >
+                    {calendarSend.text}
+                </p>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
