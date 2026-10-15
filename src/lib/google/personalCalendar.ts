@@ -34,6 +34,13 @@ export type CalendarVisit = {
   summary: string;
   location: string | null;
   description: string;
+  /**
+   * The class this visit belongs to (HH:mm). An event already sent for the
+   * same school and day whose start falls inside it is this visit at an
+   * earlier chosen window (#55: "Last 20 min" instead of "Recommended"), so
+   * it is moved, not left behind next to a new one.
+   */
+  slot?: { start: string; end: string };
 };
 
 export type SendResult =
@@ -133,14 +140,29 @@ export async function syncWeekToCalendar(
     let updated = 0;
     let removed = 0;
 
+    // An event this send's visits don't name exactly, but that sits inside
+    // one of their classes: the same visit sent with another window.
+    const sameSlotKey = (visit: CalendarVisit): string | undefined => {
+      if (!visit.slot) return undefined;
+      const [school, day] = visit.key.split("|");
+      const claimed = new Set(visits.map((v) => v.key));
+      for (const key of byKey.keys()) {
+        const [s, d, t] = key.split("|");
+        if (s !== school || d !== day || !t || claimed.has(key)) continue;
+        if (t >= visit.slot.start && t < visit.slot.end) return key;
+      }
+      return undefined;
+    };
+
     for (const visit of visits) {
-      const match = byKey.get(visit.key);
-      if (match) {
+      const matchKey = byKey.has(visit.key) ? visit.key : sameSlotKey(visit);
+      const match = matchKey ? byKey.get(matchKey) : undefined;
+      if (match && matchKey) {
         await call(token, `${API}/${encodeURIComponent(match.id)}`, {
           method: "PATCH",
           body: JSON.stringify(eventBody(visit, weekKey)),
         });
-        byKey.delete(visit.key);
+        byKey.delete(matchKey);
         updated += 1;
       } else {
         await call(token, API, { method: "POST", body: JSON.stringify(eventBody(visit, weekKey)) });

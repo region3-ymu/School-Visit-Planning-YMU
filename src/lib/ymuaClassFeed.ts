@@ -70,7 +70,10 @@ async function fetchAll(from: Date, to: Date, since: string | null) {
  * Pull YMU-A's class changes into ClassSession. `force` skips the throttle
  * (the Refresh button, the cron). Never throws for a throttled call.
  */
-export async function pullClassesFromYmua(prisma: PrismaClient, options: { force?: boolean } = {}): Promise<PullResult> {
+export async function pullClassesFromYmua(
+  prisma: PrismaClient,
+  options: { force?: boolean; full?: boolean } = {},
+): Promise<PullResult> {
   const state = await prisma.syncState.findUnique({ where: { key: FEED_KEY } });
   const now = new Date();
   if (!options.force && state?.lastRunAt && now.getTime() - state.lastRunAt.getTime() < THROTTLE_MS) {
@@ -85,7 +88,11 @@ export async function pullClassesFromYmua(prisma: PrismaClient, options: { force
   });
 
   const { start, end } = getDefaultSyncRange();
-  const since = state?.cursor ?? null;
+  // `full` (the nightly cron) reads the whole window again instead of only
+  // what changed. A class whose school SVP didn't have yet is ignored, but the
+  // cursor still moves past it, so without this a school the roster import
+  // adds tonight would get its classes only as each one is next edited.
+  const since = options.full ? null : (state?.cursor ?? null);
 
   // Changes since the cursor, across the whole window...
   const changed = await fetchAll(start, end, since);
@@ -100,7 +107,9 @@ export async function pullClassesFromYmua(prisma: PrismaClient, options: { force
   await prisma.syncState.update({
     where: { key: FEED_KEY },
     data: {
-      cursor: changed.cursor ?? since,
+      // A full read's cursor is the newest change inside the window; never
+      // move back past one already seen outside it.
+      cursor: [changed.cursor ?? since, state?.cursor ?? null].filter(Boolean).sort().at(-1) ?? null,
       windowEnd: end,
       lastResult: JSON.stringify(result),
     },

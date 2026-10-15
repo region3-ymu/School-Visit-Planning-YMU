@@ -29,6 +29,22 @@ export const UPDATES: UpdateEntry[] = [
         module: "Weekly Planner",
         text: "Choose how long visits are on your Google Calendar: a default for the week (\"Calendar visits\": recommended 20 min, first or last 20 min, or the whole class), and per visit — tap \"On your calendar\" on a card to pick another slice or set your own start and length.",
       },
+      {
+        module: "Weekly Planner",
+        text: "Changing a visit's slice and sending it to Google Calendar again moves the event that's already there instead of adding a second one.",
+      },
+      {
+        module: "Visit History",
+        text: "When you observed a class (\"Yes — I observed it\"), the teacher now sees your ratings, notes and name under Evaluations in YMU-A, and is notified. Choosing which teacher you observed is required for that. Nothing else from the visit is shared.",
+      },
+      {
+        module: "Visit History",
+        text: "Only the person who logged a visit (or a role allowed to edit others' visits) can delete it.",
+      },
+      {
+        module: "Classes",
+        text: "A school added overnight gets its classes the same night, and a class moved to a date past the planning window no longer stays at its old time.",
+      },
     ],
   },
   {

@@ -1797,6 +1797,15 @@ export async function reorderDayVisits(dateIso: string, orderedIds: string[]) {
 }
 
 export async function deleteVisitLog(id: string) {
+  // Same rule as editVisitLog: signed in, and your own visit unless your role
+  // may edit others'. It used to delete any id it was handed.
+  const session = await auth();
+  const user = requireUser(session);
+  const existing = await prisma.visit.findUnique({ where: { id }, select: { visitedById: true } });
+  if (!existing) throw new Error("Visit not found");
+  if (existing.visitedById && existing.visitedById !== user.id && !canEditOthersVisits(user)) {
+    throw new Error("That visit belongs to someone else");
+  }
   const visit = await prisma.visit.delete({ where: { id } });
   // #56: removes the evaluation from the teacher's view in YMU-A.
   after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
@@ -2293,6 +2302,7 @@ export async function getTeacherProfile(teacherId: string) {
 }
 
 export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
+  requireUser(await auth());
   // Last year's classes are still in the database. Counting them here would
   // credit a teacher with a school they no longer serve, and inflate the class
   // counts with a year nobody is planning against.
@@ -2389,6 +2399,7 @@ export async function getSchoolTeachers(schoolId: string, onDateIso?: string) {
  * who was there can simply say.
  */
 export async function getSchoolSubjects(schoolId: string, onDateIso?: string) {
+  requireUser(await auth());
   const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
   const yearStart = firstQuarter?.startDate;
 
@@ -2477,6 +2488,7 @@ const visitRuleSchema = z.object({
 });
 
 export async function getVisitRulesForSchool(schoolId: string) {
+  requireUser(await auth());
   return await prisma.visitRule.findMany({
     where: { schoolId },
     orderBy: { createdAt: "desc" },
@@ -2806,6 +2818,9 @@ const calendarVisitInput = z.object({
   endTime: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   subjectName: z.string().max(200).optional(),
   teacherName: z.string().max(200).optional(),
+  /** The class period, so a visit re-sent with another window moves its event. */
+  classStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  classEnd: z.string().regex(/^\d{2}:\d{2}$/).optional(),
 });
 
 /**
@@ -2877,6 +2892,7 @@ export async function sendWeekToGoogleCalendar(
         summary: `Visit ${school.name} | YMU`,
         location: school.address?.trim() || null,
         description: details.join("\n"),
+        slot: v.classStart && v.classEnd && v.classEnd > v.classStart ? { start: v.classStart, end: v.classEnd } : undefined,
       },
     ];
   });

@@ -19,8 +19,7 @@ export async function GET(request: NextRequest) {
 
   // First, the school roster from YMU-A (#50): a school created there today
   // exists here tomorrow without anyone running scripts/import-from-ymua.ts.
-  // Before the calendar sync, so a new school's calendar is synced in the
-  // same run. A failure here is reported but never stops the calendar sync.
+  // Before the class pull, so a new school's classes arrive in the same run. A failure here is reported but never stops the calendar sync.
   let roster: { created: number; updated: number; failures: string[] } | { error: string };
   try {
     const plan = await planYmuaImport(prisma, await fetchYmuaRoster());
@@ -31,9 +30,10 @@ export async function GET(request: NextRequest) {
   }
 
   // Classes now come from YMU-A's mirror (#53), not from Google directly —
-  // this daily run is only the backstop for the pulls the planner makes.
+  // this daily run is the backstop for the pulls the planner makes, and reads
+  // the whole window so the schools just imported above get their classes.
   try {
-    const classes = await pullClassesFromYmua(prisma, { force: true });
+    const classes = await pullClassesFromYmua(prisma, { force: true, full: true });
     return NextResponse.json({ classes, roster });
   } catch (err) {
     console.error("cron calendar sync error:", err);

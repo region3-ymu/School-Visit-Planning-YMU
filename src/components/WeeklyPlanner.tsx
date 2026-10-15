@@ -154,6 +154,8 @@ export default function WeeklyPlanner({
                     endTime: endTime && hhmm.test(endTime) ? endTime : undefined,
                     subjectName: v.subjectName,
                     teacherName: v.teacherName,
+                    classStart: [v.classStartTime, v.startTime].find((t) => t && hhmm.test(t)),
+                    classEnd: [v.classEndTime, v.endTime].find((t) => t && hhmm.test(t)),
                 };
             })
             .filter((v): v is typeof v & { startTime: string } => !!v.startTime && hhmm.test(v.startTime));
