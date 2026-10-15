@@ -405,6 +405,14 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
             return;
         }
 
+        // #56: an observation goes to the teacher's Evaluations in YMU-A, so
+        // it has to say whose class it was. "Not recorded" is how 14 of the
+        // first 105 observations ended up belonging to nobody.
+        if (showTeacherObservation && !obsSkipReason && schoolTeachers.length > 0 && !observedTeacherId) {
+            setFormError("Choose which teacher you observed — the evaluation is shared with them.");
+            return;
+        }
+
         setLoading(true);
         const isoDate = new Date(visitDate + "T12:00:00Z").toISOString();
 
@@ -1009,7 +1017,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                                 onChange={(e) => setObservedTeacherId(e.target.value)}
                                                 className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm text-gray-900 dark:text-gray-100"
                                             >
-                                                <option value="">Not recorded</option>
+                                                <option value="">{obsSkipReason ? "Not recorded" : "Choose the teacher you observed…"}</option>
                                                 {schoolTeachers.map((t) => (
                                                     <option key={t.id} value={t.id}>
                                                         {t.name}

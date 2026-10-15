@@ -36,6 +36,8 @@ import { syncDatasetToSheet } from "@/lib/export/syncSheet";
 import { haversineMeters } from "@/lib/geo";
 import { syncWeekToCalendar } from "@/lib/google/personalCalendar";
 import { pullClassesFromYmua } from "@/lib/ymuaClassFeed";
+import { syncEvaluationToYmua } from "@/lib/evaluationRelay";
+import { after } from "next/server";
 import {
   APP_TIME_ZONE,
   dayKeyInAppZone,
@@ -1143,6 +1145,9 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
 
   // Server actions can only return plain-serializable values to Client
   // Components — Prisma's Decimal type isn't, so convert it here.
+  // #56: share the observation with the teacher in YMU-A, after the
+  // response so the RM's save never waits on it.
+  after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
   return { id: visit.id, milesDriven: decimalToNumber(visit.milesDriven) };
 }
 
@@ -1390,6 +1395,8 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       obsSkipNotes: isRemote ? undefined : data.obsSkipNotes ?? undefined,
     },
   });
+  // #56: keep the teacher's Evaluations in YMU-A in step with this visit.
+  after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
   return serializeVisit(visit);
 }
 
@@ -1791,6 +1798,8 @@ export async function reorderDayVisits(dateIso: string, orderedIds: string[]) {
 
 export async function deleteVisitLog(id: string) {
   const visit = await prisma.visit.delete({ where: { id } });
+  // #56: removes the evaluation from the teacher's view in YMU-A.
+  after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
   return serializeVisit(visit);
 }
 
@@ -1900,6 +1909,8 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
       ...(!skipped && data.obsNotes !== undefined ? { obsNotes: data.obsNotes || null } : {}),
     },
   });
+  // #56: keep the teacher's Evaluations in YMU-A in step with this visit.
+  after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
   return serializeVisit(visit);
 }
 
