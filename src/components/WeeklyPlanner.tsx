@@ -21,6 +21,8 @@ import { RefreshCw, MapPin, Clock, CheckCircle, ChevronLeft, ChevronRight, Calen
 import { ViableOption, VisitInfo } from "@/lib/types";
 
 import ConfirmVisitModal from "./ConfirmVisitModal";
+import VisitWindowPicker from "./visit/VisitWindowPicker";
+import { resolveVisitWindow, visitWindowKey, WINDOW_LABELS, type WindowMode } from "@/lib/visitWindow";
 
 const FREQ_BADGE: Record<string, { label: string; cls: string }> = {
     WEEKLY: { label: "Weekly", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
@@ -46,7 +48,7 @@ export default function WeeklyPlanner({
     canPlan?: boolean;
 }) {
 
-    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, plannedFor, setPlan, planCache, addOverride, manualOverrides, clearOverrides } = usePlannerStore();
+    const { weekStartDateStr, setWeekStartDate, maxVisitsPerWeek, setMaxVisitsPerWeek, maxVisitsPerDay, setMaxVisitsPerDay, plannedVisits, setPlannedVisits, plannedFor, setPlan, planCache, addOverride, manualOverrides, clearOverrides, calendarWindowDefault, setCalendarWindowDefault, visitWindows, setVisitWindow } = usePlannerStore();
 
     const weekStartDate = new Date(weekStartDateStr);
     // Sent to the server as a plain calendar date. An ISO instant would be
@@ -135,8 +137,16 @@ export default function WeeklyPlanner({
             .filter((v) => !v.isSkipped && weekDayKeys.includes(dayKeyOf(v.date)))
             .filter((v) => scope.kind !== "day" || dayKeyOf(v.date) === scope.dayKey)
             .map((v) => {
-                const startTime = v.startTime && hhmm.test(v.startTime) ? v.startTime : v.classStartTime;
-                const endTime = v.endTime && hhmm.test(v.endTime) ? v.endTime : v.classEndTime;
+                // #55: the slice of the class the manager chose for this
+                // visit, or the week's default — not whatever times the visit
+                // happened to carry.
+                const window = resolveVisitWindow(
+                    v,
+                    visitWindows[visitWindowKey(v.schoolId, dayKeyOf(v.date), v.classStartTime ?? v.startTime)],
+                    calendarWindowDefault,
+                );
+                const startTime = window?.start;
+                const endTime = window?.end;
                 return {
                     schoolId: v.schoolId,
                     dayKey: dayKeyOf(v.date),
@@ -698,6 +708,21 @@ export default function WeeklyPlanner({
                     </button>
 
                     {canPlan && (
+                        <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300" title="How long visits are on your Google Calendar, unless you choose otherwise on a visit">
+                            <span className="hidden md:inline">Calendar visits:</span>
+                            <select
+                                value={calendarWindowDefault.mode}
+                                onChange={(e) => setCalendarWindowDefault({ mode: e.target.value as WindowMode })}
+                                className="min-h-[40px] rounded-lg border border-gray-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-2 py-1.5 text-sm"
+                            >
+                                {(["recommended", "first", "last", "whole"] as WindowMode[]).map((m) => (
+                                    <option key={m} value={m}>{WINDOW_LABELS[m]}</option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
+
+                    {canPlan && (
                         <button
                             type="button"
                             onClick={() => sendToCalendar()}
@@ -958,6 +983,15 @@ export default function WeeklyPlanner({
 
 
 
+                                                {!visit.isSkipped && (
+                                                    <VisitWindowPicker
+                                                        visit={visit}
+                                                        choice={visitWindows[visitWindowKey(visit.schoolId, dayKeyOf(visit.date), visit.classStartTime ?? visit.startTime)]}
+                                                        fallback={calendarWindowDefault}
+                                                        onChange={(w) => setVisitWindow(visitWindowKey(visit.schoolId, dayKeyOf(visit.date), visit.classStartTime ?? visit.startTime), w)}
+                                                        editable={canPlan}
+                                                    />
+                                                )}
                                                 {/* Notes above, actions below, always. Side by side, the
                                                     fifth button (Add to Google Calendar) pushed the row past
                                                     the card's edge on a phone (#51). */}

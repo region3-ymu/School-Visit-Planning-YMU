@@ -6,6 +6,7 @@ import { subDays } from 'date-fns';
 import { dayKeyInAppZone } from '../lib/timezone';
 import { dayScopeOf } from '../lib/plannerOverrides';
 import { VisitInfo } from '../lib/types';
+import { DEFAULT_WINDOW, type VisitWindow } from '../lib/visitWindow';
 
 type PlannerTab = 'dashboard' | 'planner' | 'profiles' | 'map' | 'history' | 'reports';
 
@@ -51,6 +52,16 @@ interface PlannerState {
      * change of region or targets, which is a different key) replaces it.
      */
     planCache: Record<string, { visits: VisitInfo[]; savedAt: number }>;
+
+    /**
+     * How long visits are on Google Calendar (#55): the week's default, and a
+     * choice per visit keyed by visitWindowKey(). Kept on this device, like
+     * the rest of the plan.
+     */
+    calendarWindowDefault: VisitWindow;
+    setCalendarWindowDefault: (w: VisitWindow) => void;
+    visitWindows: Record<string, VisitWindow>;
+    setVisitWindow: (key: string, w: VisitWindow | null) => void;
 
     manualOverrides: Partial<VisitInfo>[];
     addOverride: (override: Partial<VisitInfo>) => void;
@@ -98,6 +109,16 @@ export const usePlannerStore = create<PlannerState>()(
             })),
 
             planCache: {},
+
+            calendarWindowDefault: DEFAULT_WINDOW,
+            setCalendarWindowDefault: (w) => set({ calendarWindowDefault: w }),
+            visitWindows: {},
+            setVisitWindow: (key, w) => set((state) => {
+                const next = { ...state.visitWindows };
+                if (w) next[key] = w;
+                else delete next[key];
+                return { visitWindows: next };
+            }),
 
             manualOverrides: [],
             addOverride: (override) => set((state) => {
@@ -165,6 +186,8 @@ export const usePlannerStore = create<PlannerState>()(
                 plannedVisits: state.plannedVisits,
                 plannedFor: state.plannedFor,
                 planCache: state.planCache,
+                calendarWindowDefault: state.calendarWindowDefault,
+                visitWindows: state.visitWindows,
                 weekStartDateStr: state.weekStartDateStr,
                 maxVisitsPerWeek: state.maxVisitsPerWeek,
                 maxVisitsPerDay: state.maxVisitsPerDay,
@@ -186,7 +209,12 @@ export const usePlannerStore = create<PlannerState>()(
                         .sort((a, b) => b[1].savedAt - a[1].savedAt)
                         .slice(0, PLAN_CACHE_MAX_WEEKS),
                 );
-                return { ...current, ...p, manualOverrides: freshOverrides, planCache };
+                // Per-visit calendar choices for days more than a month gone.
+                const windowCutoff = dayKeyInAppZone(subDays(new Date(), 31));
+                const visitWindows = Object.fromEntries(
+                    Object.entries(p.visitWindows ?? {}).filter(([key]) => (key.split("|")[1] ?? "") >= windowCutoff),
+                );
+                return { ...current, ...p, manualOverrides: freshOverrides, planCache, visitWindows };
             },
         }
     )

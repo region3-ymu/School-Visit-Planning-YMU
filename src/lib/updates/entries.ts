@@ -23,6 +23,15 @@ export type UpdateEntry = {
 
 export const UPDATES: UpdateEntry[] = [
   {
+    date: "2026-10-15",
+    items: [
+      {
+        module: "Weekly Planner",
+        text: "Choose how long visits are on your Google Calendar: a default for the week (\"Calendar visits\": recommended 20 min, first or last 20 min, or the whole class), and per visit — tap \"On your calendar\" on a card to pick another slice or set your own start and length.",
+      },
+    ],
+  },
+  {
     date: "2026-10-14",
     items: [
       {
