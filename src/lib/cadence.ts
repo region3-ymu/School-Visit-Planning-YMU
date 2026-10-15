@@ -81,6 +81,18 @@ export function activeRulesBySchool<T extends { schoolId: string; effectiveTo: D
   return active;
 }
 
+/**
+ * The date a school's cadence counts from: its last in-person visit, or the
+ * day it came back from ON_HOLD / INACTIVE if that is later (#64). A school
+ * resumed today has had no chance to be visited; it is due one interval from
+ * now, not "overdue" or "never visited".
+ */
+export function cadenceStart(lastInPerson: Date | undefined, activeSince: Date | null | undefined): Date | undefined {
+  if (!activeSince) return lastInPerson;
+  if (!lastInPerson || activeSince > lastInPerson) return activeSince;
+  return lastInPerson;
+}
+
 export type CadenceStatus = {
   /** Nobody has been to this school in person, ever. */
   neverVisited: boolean;

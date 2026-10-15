@@ -99,6 +99,19 @@ export function canEditOthersVisits(user: Principal): boolean {
   return canAdministerApp(user);
 }
 
+/**
+ * Puts a school on hold, marks it inactive, or brings it back (#64): app
+ * administrators, Operations, and the Regional Manager of that school's
+ * region — nobody else, and no RM for another region's school.
+ */
+export function canChangeSchoolStatus(
+  user: Principal & { regionId?: string | null },
+  school: { regionId: string | null },
+): boolean {
+  if (canAdministerApp(user) || user.role === "OPERATIONS_MANAGER") return true;
+  return user.role === "REGIONAL_MANAGER" && !!user.regionId && user.regionId === school.regionId;
+}
+
 /** Sees other people's mileage, not only their own. */
 export function canSeeOthersReports(role: Role): boolean {
   return seesAllRegions(role) || role === "REGIONAL_MANAGER";

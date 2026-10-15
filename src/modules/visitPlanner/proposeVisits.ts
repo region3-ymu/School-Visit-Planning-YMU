@@ -49,7 +49,7 @@ import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { haversineMeters } from "@/lib/geo";
 import type { PinnedStop, ProposedVisit, ProposeVisitsOptions, WorkWindow } from "./types";
 import { getDefaultWorkWindow, getFrequencyDays } from "./types";
-import { activeRulesBySchool, lastContactBySchool } from "@/lib/cadence";
+import { activeRulesBySchool, cadenceStart, lastContactBySchool } from "@/lib/cadence";
 import { isAfterschoolClass } from "@/lib/afterschool";
 
 // TODO Phase 3: make configurable per RM in settings
@@ -168,9 +168,10 @@ export async function proposeVisitsForWeek(
   // Fetch all data in parallel
   const schoolWhere = regionId
     // isOffice: the planner proposes schools to visit on a cadence; the office
-    // is neither on a cadence nor a school.
-    ? { active: true, isOffice: false, regionId }
-    : { active: true, isOffice: false };
+    // is neither on a cadence nor a school. Schools on hold or inactive (#64)
+    // have nothing to visit, so they are never proposed.
+    ? { active: true, isOffice: false, status: "ACTIVE" as const, regionId }
+    : { active: true, isOffice: false, status: "ACTIVE" as const };
 
   // Planning afterschool means planning the schools that HAVE afterschool, not
   // all 109 with the rest showing up as "no class scheduled this week". Asked of
@@ -201,7 +202,7 @@ export async function proposeVisitsForWeek(
   const [schools, visitRules, doneVisits, classSessionsInWeek] = await Promise.all([
     prisma.school.findMany({
       where: scopedSchoolWhere,
-      select: { id: true, name: true, zipCode: true, lat: true, lng: true },
+      select: { id: true, name: true, zipCode: true, lat: true, lng: true, activeSince: true },
     }),
     prisma.visitRule.findMany({
       where: { school: scopedSchoolWhere },
@@ -331,7 +332,9 @@ export async function proposeVisitsForWeek(
 
     const rule = activeRuleBySchool.get(school.id);
     const freq: FrequencyType = rule?.frequencyType ?? "BIWEEKLY";
-    const lastVisit = lastVisitBySchool.get(school.id);
+    // From the day it came back from a hold, if later (#64): a school
+    // resumed this week is due one interval on, not "never visited".
+    const lastVisit = cadenceStart(lastVisitBySchool.get(school.id), school.activeSince);
     const lastRemote = lastRemoteBySchool.get(school.id);
     const daysSinceRemote = lastRemote
       ? Math.floor((today.getTime() - lastRemote.getTime()) / MS_PER_DAY)

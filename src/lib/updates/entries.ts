@@ -26,6 +26,14 @@ export const UPDATES: UpdateEntry[] = [
     date: "2026-10-15",
     items: [
       {
+        module: "Schools",
+        text: "Schools can be put On hold (ours, but no classes yet) or marked Inactive (we no longer work there, or it closed), from the school's page — by Admin, Operations or that region's Regional Manager. On hold: never proposed by the planner, not counted in the dashboard, no \"Never visited\" or \"Overdue\"; a visit can still be logged there. Inactive: hidden everywhere except visit history; find it under School Directory → Inactive to bring it back. A school that resumes counts its visits from that day.",
+      },
+      {
+        module: "Dashboard",
+        text: "\"Put on hold?\" lists active schools with no class on the calendar in the last 3 weeks or the next 4 — confirm with one tap, or \"Not now\" to hide it for 30 days. \"Schools on hold\" lists the rest, and says when one has classes on the calendar again.",
+      },
+      {
         module: "Weekly Planner",
         text: "Choose how long visits are on your Google Calendar: a default for the week (\"Calendar visits\": recommended 20 min, first or last 20 min, or the whole class), and per visit — tap \"On your calendar\" on a card to pick another slice or set your own start and length.",
       },

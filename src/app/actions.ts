@@ -18,11 +18,12 @@ import {
 import { geocodeAddress, getDrivingPolyline } from "@/lib/routing/openRouteClient";
 import { getCachedTravelMatrix } from "@/lib/routing/cachedDistanceMatrix";
 import { decimalToNumber } from "@/lib/decimal";
-import { activeRulesBySchool, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
+import { activeRulesBySchool, cadenceStart, cadenceStatus, lastContactBySchool } from "@/lib/cadence";
 import { isAfterschoolClass } from "@/lib/afterschool";
 import {
   OVERSIGHT_ROLES,
   canAdministerApp,
+  canChangeSchoolStatus,
   canEditOthersVisits,
   canFilterByRegion,
   canManageSchoolData,
@@ -76,8 +77,9 @@ export async function getDashboardStats(regionFilter?: string | null) {
       : baseWhere;
 
   // The office is a stop, not a school to be visited on a schedule — counting it
-  // here would inflate coverage against a target it was never part of.
-  const schoolsOnly = { ...regionWhere, active: true, isOffice: false };
+  // here would inflate coverage against a target it was never part of. Schools
+  // on hold or inactive (#64) are not counted either: nothing to visit there.
+  const schoolsOnly = { ...regionWhere, active: true, isOffice: false, status: "ACTIVE" as const };
 
   const totalSchools = await prisma.school.count({ where: schoolsOnly });
 
@@ -99,7 +101,7 @@ export async function getDashboardStats(regionFilter?: string | null) {
 
   const schools = await prisma.school.findMany({
     where: schoolsOnly,
-    select: { id: true, name: true },
+    select: { id: true, name: true, activeSince: true },
   });
 
   const visitedSchoolsList = schools
@@ -156,7 +158,8 @@ export async function getDashboardStats(regionFilter?: string | null) {
   const neverVisitedSchools: { id: string; name: string }[] = [];
 
   for (const school of schools) {
-    const last = lastInPerson.get(school.id);
+    // Counted from the day it came back from a hold, if that is later (#64).
+    const last = cadenceStart(lastInPerson.get(school.id), school.activeSince);
     const status = cadenceStatus(last, activeRules.get(school.id)?.frequencyType, today);
     if (status.neverVisited) {
       // Counted apart from overdue on purpose: "twelve schools nobody has ever
@@ -233,8 +236,59 @@ export async function getDashboardStats(regionFilter?: string | null) {
     total: weekVisits.reduce((sum, w) => sum + w._count._all, 0),
   };
 
+  // ─── On hold, and schools that look like they should be (#64) ─────────────
+  const statusScope = { ...regionWhere, active: true, isOffice: false };
+  const HOLD_LOOKBACK_DAYS = 21;
+  const HOLD_LOOKAHEAD_DAYS = 28;
+  const [onHoldRows, noClassRows, resumeRows] = await Promise.all([
+    prisma.school.findMany({
+      where: { ...statusScope, status: "ON_HOLD" },
+      select: { id: true, name: true, regionId: true, statusReason: true, statusChangedAt: true },
+      orderBy: { name: "asc" },
+    }),
+    // Active, and not one class in the calendar three weeks back or four ahead.
+    prisma.school.findMany({
+      where: {
+        ...statusScope,
+        status: "ACTIVE",
+        classSessions: {
+          none: { startDateTime: { gte: addDays(today, -HOLD_LOOKBACK_DAYS), lt: addDays(today, HOLD_LOOKAHEAD_DAYS) } },
+        },
+        OR: [{ holdSuggestionSnoozedUntil: null }, { holdSuggestionSnoozedUntil: { lt: new Date() } }],
+      },
+      select: { id: true, name: true, regionId: true },
+      orderBy: { name: "asc" },
+    }),
+    // On hold, but classes are on the calendar again in the next two weeks.
+    prisma.school.findMany({
+      where: {
+        ...statusScope,
+        status: "ON_HOLD",
+        classSessions: { some: { startDateTime: { gte: today, lt: addDays(today, 14) } } },
+      },
+      select: { id: true },
+    }),
+  ]);
+  const resumeIds = new Set(resumeRows.map((r) => r.id));
+  const onHoldSchools = onHoldRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    reason: r.statusReason,
+    sinceKey: r.statusChangedAt ? dayKeyInAppZone(r.statusChangedAt) : null,
+    hasClassesAgain: resumeIds.has(r.id),
+    canChange: canChangeSchoolStatus(user, r),
+  }));
+  const holdSuggestions = noClassRows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    canChange: canChangeSchoolStatus(user, r),
+  }));
+
   return {
     totalActiveSchools: totalSchools,
+    onHoldSchools,
+    holdSuggestions,
+    holdSuggestionWeeks: { back: HOLD_LOOKBACK_DAYS / 7, ahead: HOLD_LOOKAHEAD_DAYS / 7 },
     dueThisWeek: dueSchools.length,
     overdue: overdueSchools.length,
     neverVisited: neverVisitedSchools.length,
@@ -248,7 +302,13 @@ export async function getDashboardStats(regionFilter?: string | null) {
   };
 }
 
-export async function getSchools(regionFilter?: string | null) {
+/**
+ * Schools for pickers, lists and the map. ON_HOLD schools are included — a
+ * visit can still be logged there, and the lists grey them — but INACTIVE ones
+ * (#64: no longer ours, or closed) only when asked for, by the school list
+ * that is where they are brought back from.
+ */
+export async function getSchools(regionFilter?: string | null, options: { includeInactive?: boolean } = {}) {
   const session = await auth();
   const user = requireUser(session);
   const baseWhere = schoolRegionWhere(user);
@@ -258,7 +318,12 @@ export async function getSchools(regionFilter?: string | null) {
       : baseWhere;
 
   return await prisma.school.findMany({
-    where: { ...regionWhere, active: true, isOffice: false },
+    where: {
+      ...regionWhere,
+      active: true,
+      isOffice: false,
+      ...(options.includeInactive ? {} : { status: { not: "INACTIVE" as const } }),
+    },
     orderBy: { name: "asc" },
   });
 }
@@ -285,6 +350,7 @@ export async function getOtherRegionSchools() {
     where: {
       active: true,
       isOffice: false,
+      status: { not: "INACTIVE" },
       OR: [{ regionId: { not: ownRegionId } }, { regionId: null }],
     },
     select: { id: true, name: true, region: { select: { name: true } } },
@@ -649,7 +715,7 @@ export async function getManualVisit(
   // Scoped like getSchools, so this cannot be used to place a visit on a school
   // outside the caller's own region.
   const school = await prisma.school.findFirst({
-    where: { id: schoolId, active: true, isOffice: false, ...schoolRegionWhere(user) },
+    where: { id: schoolId, active: true, isOffice: false, status: { not: "INACTIVE" }, ...schoolRegionWhere(user) },
     select: { id: true },
   });
   if (!school) return null;
@@ -2125,6 +2191,10 @@ export async function getSchoolProfile(schoolId: string) {
   });
   if (!school) return null;
 
+  const statusChangedBy = school.statusChangedById
+    ? await prisma.user.findUnique({ where: { id: school.statusChangedById }, select: { name: true, email: true } })
+    : null;
+
   const [schedules, teachers, visits] = await Promise.all([
     getSchoolWeeklySchedules([schoolId]),
     getSchoolTeachers(schoolId),
@@ -2146,6 +2216,12 @@ export async function getSchoolProfile(schoolId: string) {
       lat: school.lat,
       lng: school.lng,
       isOffice: school.isOffice,
+      // #64
+      status: school.status,
+      statusReason: school.statusReason,
+      statusChangedKey: school.statusChangedAt ? dayKeyInAppZone(school.statusChangedAt) : null,
+      statusChangedBy: statusChangedBy?.name ?? statusChangedBy?.email ?? null,
+      canChangeStatus: !school.isOffice && canChangeSchoolStatus(user, school),
     },
     schedule: schedules[schoolId] ?? [],
     teachers,
@@ -2898,6 +2974,62 @@ export async function sendWeekToGoogleCalendar(
   });
 
   return syncWeekToCalendar(user.email, weekKey, calendarVisits, removeWithinDays);
+}
+
+// ─── School status: active, on hold, inactive (#64) ─────────────────────────
+
+const schoolStatusInput = z.object({
+  schoolId: z.string().min(1),
+  status: z.enum(["ACTIVE", "ON_HOLD", "INACTIVE"]),
+  reason: z.string().max(500).optional(),
+});
+
+/**
+ * Puts a school on hold, marks it inactive, or brings it back. Admin,
+ * Operations, and the Regional Manager of the school's region. Coming back to
+ * ACTIVE stamps activeSince, so its cadence starts from today rather than
+ * calling it overdue or never visited the moment it returns.
+ */
+export async function setSchoolStatus(input: unknown) {
+  const user = requireUser(await auth());
+  const parsed = schoolStatusInput.safeParse(input);
+  if (!parsed.success) return { ok: false as const, error: "That status change was not readable." };
+  const { schoolId, status, reason } = parsed.data;
+
+  const school = await prisma.school.findUnique({
+    where: { id: schoolId },
+    select: { id: true, regionId: true, status: true, isOffice: true },
+  });
+  if (!school || school.isOffice) return { ok: false as const, error: "School not found." };
+  if (!canChangeSchoolStatus(user, school)) {
+    return { ok: false as const, error: "Only Admin, Operations or this region's Regional Manager can change that." };
+  }
+  if (school.status === status) return { ok: true as const };
+
+  const now = new Date();
+  await prisma.school.update({
+    where: { id: schoolId },
+    data: {
+      status,
+      statusReason: status === "ACTIVE" ? null : reason?.trim() || null,
+      statusChangedAt: now,
+      statusChangedById: user.id,
+      ...(status === "ACTIVE" ? { activeSince: now, holdSuggestionSnoozedUntil: null } : {}),
+    },
+  });
+  return { ok: true as const };
+}
+
+/** "Not now" on a hold suggestion: hidden for 30 days, then asked again. */
+export async function snoozeHoldSuggestion(schoolId: string) {
+  const user = requireUser(await auth());
+  const school = await prisma.school.findUnique({ where: { id: schoolId }, select: { regionId: true } });
+  if (!school || !canChangeSchoolStatus(user, school)) return { ok: false as const };
+  await prisma.school.update({
+    where: { id: schoolId },
+    data: { holdSuggestionSnoozedUntil: addDays(new Date(), 30) },
+  });
+  return { ok: true as const };
 }
 
 // ─── Drive times between a day's visits (#62, point 1) ──────────────────────

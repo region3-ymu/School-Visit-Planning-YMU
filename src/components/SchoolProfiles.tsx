@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getSchools, getSchoolWeeklySchedules } from "@/app/actions";
 import { MapPin, Search, Clock } from "lucide-react";
 import Link from "next/link";
+import { SchoolStatusBadge } from "@/components/school/SchoolStatusControl";
 
 export default function SchoolProfiles({ regionFilter }: { regionFilter?: string | null }) {
     type School = Awaited<ReturnType<typeof getSchools>>[number];
@@ -11,9 +12,12 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
     const [schools, setSchools] = useState<School[]>([]);
     const [schedules, setSchedules] = useState<Schedules>({});
     const [search, setSearch] = useState("");
+    // #64: inactive schools are listed only here, behind their own filter —
+    // this is where they are found again to be reactivated.
+    const [statusView, setStatusView] = useState<"current" | "ON_HOLD" | "INACTIVE">("current");
 
     useEffect(() => {
-        getSchools(regionFilter).then(async (list) => {
+        getSchools(regionFilter, { includeInactive: true }).then(async (list) => {
             setSchools(list);
             // The real timetable, from the calendar. School.availability was a
             // hand-kept blob that mostly said "no windows set" or named an A/B day
@@ -22,9 +26,12 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
         });
     }, [regionFilter]);
 
-    const filteredSchools = schools.filter(s =>
-        s.name.toLowerCase().includes(search.toLowerCase())
-    );
+    const filteredSchools = schools
+        .filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
+        .filter(s => statusView === "current" ? s.status !== "INACTIVE" : s.status === statusView)
+        // Schools on hold after the ones being visited.
+        .sort((a, b) => Number(a.status === "ON_HOLD") - Number(b.status === "ON_HOLD") || a.name.localeCompare(b.name));
+    const countOf = (status: string) => schools.filter(s => s.status === status).length;
 
     return (
         <div className="p-4 sm:p-6">
@@ -42,14 +49,42 @@ export default function SchoolProfiles({ regionFilter }: { regionFilter?: string
                 </div>
             </div>
 
+            <div className="flex flex-wrap gap-2 mb-4 text-sm">
+                {([
+                    ["current", "Schools"],
+                    ["ON_HOLD", `On hold (${countOf("ON_HOLD")})`],
+                    ["INACTIVE", `Inactive (${countOf("INACTIVE")})`],
+                ] as const).map(([key, label]) => (
+                    <button
+                        key={key}
+                        type="button"
+                        onClick={() => setStatusView(key)}
+                        className={`rounded-full px-3 py-1 border ${statusView === key
+                            ? "bg-indigo-600 border-indigo-600 text-white"
+                            : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-zinc-800"}`}
+                    >
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            {filteredSchools.length === 0 && (
+                <p className="text-sm text-gray-500">
+                    {statusView === "ON_HOLD" ? "No schools on hold." : statusView === "INACTIVE" ? "No inactive schools." : "No schools match."}
+                </p>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {filteredSchools.map((school) => (
-                    <div key={school.id} className="bg-white dark:bg-zinc-900 p-5 rounded-xl border border-gray-100 dark:border-zinc-800 shadow-sm relative overflow-hidden hover:border-indigo-500 transition-colors">
+                    <div key={school.id} className={`bg-white dark:bg-zinc-900 p-5 rounded-xl border border-gray-100 dark:border-zinc-800 shadow-sm relative overflow-hidden hover:border-indigo-500 transition-colors ${school.status !== "ACTIVE" ? "opacity-70" : ""}`}>
                         <Link href={`/schools/${school.id}`} className="block group">
-                            <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                                {school.name}
+                            <h3 className="font-bold text-lg text-gray-800 dark:text-gray-100 mb-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors flex flex-wrap items-center gap-2">
+                                {school.name} <SchoolStatusBadge status={school.status} />
                             </h3>
                         </Link>
+                        {school.status !== "ACTIVE" && school.statusReason && (
+                            <p className="-mt-1 mb-2 text-xs text-gray-500">{school.statusReason}</p>
+                        )}
 
                         <div className="flex items-center text-sm text-gray-500 mb-4">
                             <MapPin size={16} className="mr-1" /> Zip: {school.zipCode}

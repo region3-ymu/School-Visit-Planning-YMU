@@ -38,7 +38,7 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
     }),
     prisma.school.findMany({
       select: { id: true, name: true, externalId: true, address: true, zipCode: true, lat: true, lng: true,
-                geocodeSource: true, active: true, isOffice: true, googleCalendarId: true,
+                geocodeSource: true, active: true, isOffice: true, googleCalendarId: true, status: true, statusReason: true,
                 calendarLastSyncedAt: true, region: { select: { code: true } } },
       orderBy: { name: "asc" },
     }),
@@ -117,11 +117,11 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
       title: "Schools",
       rows: [
         ["School ID", "Name", "Region", "Address", "Zip", "Latitude", "Longitude", "Geocode source",
-         "Active", "Is office", "Calendar connected", "Calendar last synced", "YMU-A ID"],
+         "Active", "Is office", "Calendar connected", "Calendar last synced", "YMU-A ID", "Status", "Status reason"],
         ...schools.map((s) => [
           s.id, s.name, s.region?.code ?? "", s.address ?? "", s.zipCode, s.lat ?? "", s.lng ?? "",
           s.geocodeSource ?? "", s.active, s.isOffice, s.googleCalendarId != null,
-          date(s.calendarLastSyncedAt), s.externalId ?? "",
+          date(s.calendarLastSyncedAt), s.externalId ?? "", s.status, s.statusReason ?? "",
         ]),
       ],
     },

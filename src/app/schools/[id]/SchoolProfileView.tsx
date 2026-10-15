@@ -6,6 +6,7 @@ import { format } from "date-fns";
 import { CalendarDays, MapPin, Users } from "lucide-react";
 import { getSchoolProfile } from "@/app/actions";
 import VisitDetails from "@/components/visit/VisitDetails";
+import SchoolStatusControl, { SchoolStatusBadge, type SchoolStatus } from "@/components/school/SchoolStatusControl";
 
 type Profile = NonNullable<Awaited<ReturnType<typeof getSchoolProfile>>>;
 
@@ -44,7 +45,9 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
   return (
     <div className="space-y-4">
       <Card>
-        <h1 className="text-xl font-bold">{school.name}</h1>
+        <h1 className="text-xl font-bold flex flex-wrap items-center gap-2">
+          {school.name} <SchoolStatusBadge status={school.status} />
+        </h1>
         <div className="text-sm text-gray-500 dark:text-gray-400 mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
           {school.address && (
             <span className="inline-flex items-center gap-1.5">
@@ -54,6 +57,21 @@ export default function SchoolProfileView({ schoolId }: { schoolId: string }) {
           {school.regionName && <span>{school.regionName}</span>}
           <span>Zip: {school.zipCode ?? "—"}</span>
         </div>
+        {school.status !== "ACTIVE" && (
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+            {school.status === "ON_HOLD" ? "On hold" : "Inactive"}
+            {school.statusChangedKey && ` since ${format(new Date(`${school.statusChangedKey}T12:00:00`), "MMM d, yyyy")}`}
+            {school.statusChangedBy && ` · by ${school.statusChangedBy}`}
+            {school.statusReason && ` · ${school.statusReason}`}
+          </p>
+        )}
+        {school.canChangeStatus && (
+          <SchoolStatusControl
+            schoolId={school.id}
+            status={school.status as SchoolStatus}
+            onChanged={() => getSchoolProfile(schoolId).then(setData)}
+          />
+        )}
       </Card>
 
       <Card>

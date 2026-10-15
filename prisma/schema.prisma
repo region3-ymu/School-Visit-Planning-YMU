@@ -129,7 +129,22 @@ model School {
   // sourced from YMU-A arrive already geocoded and must not be re-geocoded.
   geocodeSource        String?
   availability         String    @default("[]")
+  /// Merged duplicate / dropped from the roster (import scripts). Not the
+  /// same thing as `status`: the nightly YMU-A import rewrites this one.
   active               Boolean   @default(true)
+  /// #64: ACTIVE, ON_HOLD (ours, but no classes yet — not planned, not
+  /// counted, no "Never visited") or INACTIVE (we no longer work there, or it
+  /// closed — hidden except in history). Set only from the app; no import
+  /// touches it.
+  status               SchoolStatus @default(ACTIVE)
+  statusReason         String?
+  statusChangedAt      DateTime?
+  statusChangedById    String?
+  /// When the school last came back to ACTIVE. Cadence counts from here, so a
+  /// school resumed today is not instantly "overdue" or "never visited".
+  activeSince          DateTime?
+  /// "No classes for weeks — put on hold?" dismissed until this date.
+  holdSuggestionSnoozedUntil DateTime?
   /// True for the YMU office. Kept out of school lists, counts, the planner
   /// and the roster importers, but reachable for mileage like any other stop.
   isOffice             Boolean   @default(false)
@@ -153,6 +168,13 @@ model School {
 
   @@index([regionId])
   @@index([isOffice])
+  @@index([status])
+}
+
+enum SchoolStatus {
+  ACTIVE
+  ON_HOLD
+  INACTIVE
 }
 
 model Teacher {

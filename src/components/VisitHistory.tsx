@@ -814,7 +814,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     >
                                         <option value="">Select a school...</option>
                                         {schools.map(s => (
-                                            <option key={s.id} value={s.id}>{s.name}</option>
+                                            <option key={s.id} value={s.id}>{s.name}{s.status === "ON_HOLD" ? " (on hold)" : ""}</option>
                                         ))}
                                         {office && (
                                             <optgroup label="Not a school">

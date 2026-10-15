@@ -241,7 +241,7 @@ export default function WeeklyPlanner({
 
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
-    const [allSchools, setAllSchools] = useState<{ id: string, name: string }[]>([]);
+    const [allSchools, setAllSchools] = useState<{ id: string, name: string, status: string }[]>([]);
 
     const [selectedSchoolIdForAdd, setSelectedSchoolIdForAdd] = useState<string>("");
 
@@ -468,7 +468,7 @@ export default function WeeklyPlanner({
 
             const schools = await getSchools(regionFilter);
 
-            setAllSchools(schools.map(s => ({ id: s.id, name: s.name })));
+            setAllSchools(schools.map(s => ({ id: s.id, name: s.name, status: s.status })));
 
         }
 
@@ -1449,7 +1449,7 @@ export default function WeeklyPlanner({
 
                                 {allSchools.map(s => (
 
-                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                    <option key={s.id} value={s.id}>{s.name}{s.status === "ON_HOLD" ? " (on hold)" : ""}</option>
 
                                 ))}
 

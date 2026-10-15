@@ -6,6 +6,7 @@ import { useSession } from "next-auth/react";
 import { getDashboardStats, syncExportSheet, refreshClasses } from "@/app/actions";
 import { usePlannerStore } from "@/store/plannerStore";
 import { OVERSIGHT_ROLES } from "@/lib/permissions";
+import SchoolHoldPanel from "@/components/school/SchoolHoldPanel";
 import {
     Building2,
     CalendarX,
@@ -173,6 +174,9 @@ export default function Dashboard({
         cancellationWindowDays: 30,
         thisWeek: { inPerson: 0, online: 0, phone: 0, total: 0 },
         visitedSchoolsList: [] as { id: string, name: string, visitCount: number }[],
+        onHoldSchools: [] as { id: string; name: string; reason: string | null; sinceKey: string | null; hasClassesAgain: boolean; canChange: boolean }[],
+        holdSuggestions: [] as { id: string; name: string; canChange: boolean }[],
+        holdSuggestionWeeks: { back: 3, ahead: 4 },
     });
 
     useEffect(() => {
@@ -297,6 +301,13 @@ export default function Dashboard({
                     )}
                 </div>
             )}
+
+            <SchoolHoldPanel
+                onHold={stats.onHoldSchools}
+                suggestions={stats.holdSuggestions}
+                weeks={stats.holdSuggestionWeeks}
+                onChanged={() => getDashboardStats(regionFilter).then(setStats)}
+            />
 
             <div className="mt-4 sm:mt-6 grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
                 {/* Visits, not schools: the same school twice in a week is two
