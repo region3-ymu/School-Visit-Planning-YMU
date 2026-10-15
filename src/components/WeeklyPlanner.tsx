@@ -4,7 +4,7 @@
 
 import { useEffect, useState } from "react";
 
-import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit, sendWeekToGoogleCalendar, refreshClasses } from "@/app/actions";
+import { getWeeklyPlan, getSchools, getSchoolOptionsForWeek, getManualVisit, skipVisit, sendWeekToGoogleCalendar, refreshClasses, getDayDriveMinutes } from "@/app/actions";
 
 import { usePlannerStore } from "@/store/plannerStore";
 
@@ -22,7 +22,7 @@ import { ViableOption, VisitInfo } from "@/lib/types";
 
 import ConfirmVisitModal from "./ConfirmVisitModal";
 import VisitWindowPicker from "./visit/VisitWindowPicker";
-import { resolveDayWindows, visitWindowKey, WINDOW_LABELS, type WindowMode } from "@/lib/visitWindow";
+import { resolveDayWindows, visitWindowKey, WINDOW_LABELS, type DriveMinutes, type WindowMode } from "@/lib/visitWindow";
 
 const FREQ_BADGE: Record<string, { label: string; cls: string }> = {
     WEEKLY: { label: "Weekly", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
@@ -134,11 +134,38 @@ export default function WeeklyPlanner({
     // visits that day don't land on the same 20 minutes (Henry E. S. Reeves
     // and Lakeview, 2026-10-15). The cards and the export both read this.
     const windowKeyOf = (v: VisitInfo) => visitWindowKey(v.schoolId, dayKeyOf(v.date), v.classStartTime ?? v.startTime);
+    // Real drive times between each day's schools (cached server-side per
+    // pair), fetched when the set of schools per day changes.
+    const [driveMinutes, setDriveMinutes] = useState<DriveMinutes>({});
+    const dayGroups = Object.values(
+        plannedVisits
+            .filter((v) => !v.isSkipped)
+            .reduce<Record<string, string[]>>((acc, v) => {
+                const key = dayKeyOf(v.date);
+                acc[key] = [...new Set([...(acc[key] ?? []), v.schoolId])].sort();
+                return acc;
+            }, {}),
+    ).filter((g) => g.length > 1);
+    const dayGroupsKey = JSON.stringify(dayGroups);
+    useEffect(() => {
+        const groups = JSON.parse(dayGroupsKey) as string[][];
+        if (groups.length === 0) return;
+        let cancelled = false;
+        getDayDriveMinutes(groups)
+            .then((m) => {
+                if (!cancelled) setDriveMinutes((prev) => ({ ...prev, ...m }));
+            })
+            .catch((e) => console.error(e));
+        return () => {
+            cancelled = true;
+        };
+    }, [dayGroupsKey]);
     const resolvedWindows = resolveDayWindows(
         plannedVisits.filter((v) => !v.isSkipped),
         (v) => visitWindows[windowKeyOf(v)],
         calendarWindowDefault,
         (v) => dayKeyOf(v.date),
+        driveMinutes,
     );
 
     type CalendarScope = { kind: "week" } | { kind: "day"; dayKey: string } | { kind: "visit"; visit: VisitInfo };
@@ -1036,6 +1063,7 @@ export default function WeeklyPlanner({
                                                         choice={visitWindows[windowKeyOf(visit)]}
                                                         fallback={calendarWindowDefault}
                                                         onChange={(w) => setVisitWindow(windowKeyOf(visit), w)}
+                                                        onFix={(v, w) => setVisitWindow(windowKeyOf(v), w)}
                                                         editable={canPlan}
                                                     />
                                                 )}

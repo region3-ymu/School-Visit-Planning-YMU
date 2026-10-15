@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { AlertTriangle, CalendarClock } from "lucide-react";
+import type { VisitInfo } from "@/lib/types";
 import { WINDOW_LABELS, type ResolvedWindow, type VisitWindow, type WindowMode } from "@/lib/visitWindow";
 
 /**
@@ -17,12 +18,15 @@ export default function VisitWindowPicker({
   choice,
   fallback,
   onChange,
+  onFix,
   editable,
 }: {
   resolved: ResolvedWindow | null;
   choice: VisitWindow | undefined;
   fallback: VisitWindow;
   onChange: (w: VisitWindow | null) => void;
+  /** Applies a suggested fix, which may be on the visit before this one. */
+  onFix: (visit: VisitInfo, w: VisitWindow) => void;
   editable: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -30,10 +34,34 @@ export default function VisitWindowPicker({
 
   const mode: WindowMode | "default" = choice?.mode ?? "default";
   const summary = `${resolved.start}–${resolved.end} · ${resolved.label}${choice ? "" : " (default)"}`;
-  const conflict = resolved.conflict && (
-    <p className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400">
-      <AlertTriangle size={12} className="shrink-0" /> Not enough time to get here from the visit before — pick another slice or move one.
-    </p>
+  const c = resolved.conflict;
+  const conflict = c && (
+    <div className="mt-1 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 p-1.5 text-[11px] text-amber-800 dark:text-amber-300">
+      <p className="flex items-start gap-1">
+        <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+        <span>
+          Not enough time: you leave {c.fromSchool} at {c.leaveAt}, {c.estimated ? "about " : ""}
+          {c.driveMinutes} min drive{c.estimated ? " (estimate)" : ""}, so you&apos;d arrive at {c.arriveAt} — after {resolved.start}.
+        </span>
+      </p>
+      {editable && c.fixes.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {c.fixes.map((fix) => (
+            <button
+              key={fix.text}
+              type="button"
+              onClick={() => onFix(fix.visit, fix.window)}
+              className="rounded-full border border-amber-300 dark:border-amber-800 bg-white dark:bg-zinc-800 px-2 py-0.5 hover:bg-amber-100 dark:hover:bg-amber-900/40"
+            >
+              {fix.text}
+            </button>
+          ))}
+        </div>
+      )}
+      {c.fixes.length === 0 && (
+        <p className="mt-1">No slice of either class works — postpone one of the two visits.</p>
+      )}
+    </div>
   );
 
   if (!editable) {

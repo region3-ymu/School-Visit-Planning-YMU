@@ -2900,6 +2900,58 @@ export async function sendWeekToGoogleCalendar(
   return syncWeekToCalendar(user.email, weekKey, calendarVisits, removeWithinDays);
 }
 
+// ─── Drive times between a day's visits (#62, point 1) ──────────────────────
+
+/**
+ * Real driving minutes between the schools of each planned day, for the
+ * calendar windows: whether the last 20 minutes of one class and the first of
+ * another can both be made. Each group is one day's schools. Same routing
+ * service and per-pair cache as the planner and the map, so a pair of schools
+ * is only ever asked of OpenRouteService once. Keys are "fromId|toId".
+ * A day the service can't price is simply left out; the client falls back
+ * to the planner's straight-line estimate and says it is an estimate.
+ */
+export async function getDayDriveMinutes(groups: string[][]): Promise<Record<string, number>> {
+  const user = requireUser(await auth());
+  if (!canPlanVisits(user.role)) return {};
+  if (!process.env.OPENROUTE_SERVICE_API_KEY) return {};
+
+  const days = groups
+    .map((g) => [...new Set(g.filter((id) => typeof id === "string"))])
+    .filter((g) => g.length > 1 && g.length <= 12)
+    .slice(0, 7);
+  if (days.length === 0) return {};
+
+  const schools = await prisma.school.findMany({
+    where: { id: { in: [...new Set(days.flat())] } },
+    select: { id: true, lat: true, lng: true },
+  });
+  const byId = new Map(schools.filter((s) => s.lat != null && s.lng != null).map((s) => [s.id, s]));
+
+  const minutes: Record<string, number> = {};
+  const service = new OpenRouteDistanceService();
+  for (const day of days) {
+    const ids = day.filter((id) => byId.has(id));
+    if (ids.length < 2) continue;
+    try {
+      const matrix = await getCachedTravelMatrix(
+        ids.map((id) => ({ lat: byId.get(id)!.lat!, lng: byId.get(id)!.lng! })),
+        prisma,
+        service,
+      );
+      ids.forEach((from, i) =>
+        ids.forEach((to, j) => {
+          const sec = matrix.durations[i]?.[j];
+          if (i !== j && sec != null && Number.isFinite(sec) && sec > 0) minutes[`${from}|${to}`] = Math.round(sec / 60);
+        }),
+      );
+    } catch (err) {
+      console.error("getDayDriveMinutes:", err);
+    }
+  }
+  return minutes;
+}
+
 // ─── Classes from YMU-A (#53) ────────────────────────────────────────────────
 
 /**

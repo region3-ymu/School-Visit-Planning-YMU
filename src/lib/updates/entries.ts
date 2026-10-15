@@ -39,7 +39,7 @@ export const UPDATES: UpdateEntry[] = [
       },
       {
         module: "Weekly Planner",
-        text: "Visits on the same day no longer land on the same 20 minutes. Two classes at the same time (Henry E. S. Reeves and Lakeview, 1:05–2:05) get the first 20 minutes of one and the last 20 of the other, allowing for the drive. If a visit can't be reached in time, its card says so.",
+        text: "Visits on the same day no longer land on the same 20 minutes — planned, added by hand or postponed alike. Two classes at the same time (Henry E. S. Reeves and Lakeview, 1:05–2:05) get the first 20 minutes of one and the last 20 of the other, checked against real drive times. If a visit can't be reached in time, its card says where you'd be coming from, how long the drive is and when you'd arrive, with one-tap fixes — or, when no slice works, to postpone one of them. Slices you chose yourself are never moved.",
       },
       {
         module: "Visit History",

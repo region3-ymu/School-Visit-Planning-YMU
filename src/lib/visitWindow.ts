@@ -104,94 +104,173 @@ export function resolveVisitWindow(
   }
 }
 
-export type ResolvedWindow = { start: string; end: string; label: string; conflict: boolean };
+/** What to do about a visit that can't be reached in time. */
+export type WindowFix = { visit: VisitInfo; window: VisitWindow; text: string };
 
-/** Same assumption as the planner's own drivability check (proposeVisits). */
+export type ResolvedWindow = {
+  start: string;
+  end: string;
+  label: string;
+  /** Set when the visit before it ends too late to drive here in time. */
+  conflict: {
+    fromSchool: string;
+    leaveAt: string;
+    driveMinutes: number;
+    arriveAt: string;
+    /** True when no road time was available and the straight-line guess was used. */
+    estimated: boolean;
+    /** Changes that would make the day work, best first. Empty: postpone one. */
+    fixes: WindowFix[];
+  } | null;
+};
+
+/** The planner's own fallback assumption when there is no road time. */
 const ASSUMED_METRES_PER_MIN = 500;
 const LATE_TOLERANCE_MIN = 5;
+/** Beyond this many free choices in one day, stop trying every combination. */
+const MAX_EXHAUSTIVE = 10;
 
-function travelMinutes(a: VisitInfo, b: VisitInfo): number {
-  if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) return 0;
-  if (a.schoolId === b.schoolId) return 0;
-  return haversineMeters(a.lat, a.lng, b.lat, b.lng) / ASSUMED_METRES_PER_MIN;
+export type DriveMinutes = Record<string, number>;
+
+function drive(a: VisitInfo, b: VisitInfo, road: DriveMinutes): { minutes: number; estimated: boolean } {
+  if (a.schoolId === b.schoolId) return { minutes: 0, estimated: false };
+  const known = road[`${a.schoolId}|${b.schoolId}`];
+  if (known != null) return { minutes: known, estimated: false };
+  if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) return { minutes: 0, estimated: true };
+  return { minutes: Math.round(haversineMeters(a.lat, a.lng, b.lat, b.lng) / ASSUMED_METRES_PER_MIN), estimated: true };
+}
+
+type Option = { start: string; end: string; label: string; window: VisitWindow };
+type Slot = { v: VisitInfo; start: number; end: number };
+
+/** Minutes late at the worst stop, and in total, for windows in time order. */
+function lateness(slots: Slot[], road: DriveMinutes) {
+  const sorted = [...slots].sort((a, b) => a.start - b.start || a.end - b.end);
+  let worst = 0;
+  let total = 0;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const late = sorted[i - 1].end + drive(sorted[i - 1].v, sorted[i].v, road).minutes - sorted[i].start;
+    if (late > LATE_TOLERANCE_MIN) {
+      worst = Math.max(worst, late);
+      total += late;
+    }
+  }
+  return { worst, total };
 }
 
 /**
- * Every visit's window, a day at a time, so visits on the same day don't
- * collide (Emilio, 2026-10-15: Henry E. S. Reeves and Lakeview, both
- * 13:05–14:05, both went on the calendar at 13:05–13:25).
+ * Every visit's calendar window, a day at a time, so a day's visits fit
+ * together (#62 point 1, Emilio, 2026-10-15: Henry E. S. Reeves and Lakeview,
+ * both 13:05–14:05, both went on the calendar at 13:05–13:25).
  *
- * A visit following the "Recommended" default with no 20-minute slot of its
- * own (added by hand, postponed) may take either end of its class: the first
- * 20 minutes, or the last 20 if the first would clash with — or leave no time
- * to drive from — a visit already placed. Anything the manager chose
- * explicitly stays exactly where they put it. A visit that can't be reached in
- * time either way is flagged `conflict`, never moved somewhere impossible.
+ * Every visit following the "Recommended" default — planned, added by hand or
+ * postponed alike — may take the first or the last 20 minutes of its class
+ * (or the planner's own slot, preferred when it works). Every combination for
+ * the day is tried against real drive times (`road`, from
+ * getDayDriveMinutes; the planner's straight-line guess where missing), and
+ * the one that reaches every visit on time wins, earliest slices first among
+ * equals. What the manager chose explicitly is never moved. A visit that
+ * still can't be reached is flagged with where the drive comes from and the
+ * changes that would fix it.
  */
 export function resolveDayWindows(
   visits: VisitInfo[],
   choiceFor: (v: VisitInfo) => VisitWindow | undefined,
   fallback: VisitWindow,
   dayKeyOf: (v: VisitInfo) => string,
+  road: DriveMinutes = {},
 ): Map<VisitInfo, ResolvedWindow> {
   const out = new Map<VisitInfo, ResolvedWindow>();
   const byDay = new Map<string, VisitInfo[]>();
-  for (const v of visits) {
-    const key = dayKeyOf(v);
-    byDay.set(key, [...(byDay.get(key) ?? []), v]);
-  }
+  for (const v of visits) byDay.set(dayKeyOf(v), [...(byDay.get(dayKeyOf(v)) ?? []), v]);
+
+  const optionsFor = (v: VisitInfo): Option[] | null => {
+    const choice = choiceFor(v);
+    const own = resolveVisitWindow(v, choice, fallback);
+    if (!own) return null;
+    if (choice || fallback.mode !== "recommended") return [{ ...own, window: choice ?? fallback }];
+    const list: Option[] = [{ ...own, window: { mode: "recommended" } }];
+    for (const mode of ["first", "last"] as const) {
+      const w = resolveVisitWindow(v, { mode }, fallback)!;
+      if (!list.some((o) => o.start === w.start)) list.push({ ...w, label: WINDOW_LABELS.recommended, window: { mode } });
+    }
+    return list;
+  };
+  /** Every slice a manager could pick for this visit, for suggesting fixes. */
+  const allSlices = (v: VisitInfo): Option[] =>
+    (["first", "last"] as const)
+      .map((mode) => ({ ...resolveVisitWindow(v, { mode }, fallback)!, window: { mode } as VisitWindow }))
+      .filter((o, i, list) => o.start && list.findIndex((x) => x.start === o.start) === i);
 
   for (const day of byDay.values()) {
-    type Placed = { v: VisitInfo; start: number; end: number };
-    const placed: Placed[] = [];
-    // Minutes late reaching `cand` (or leaving it for the next stop), given
-    // what is already placed; 0 when it fits.
-    const lateness = (v: VisitInfo, start: number, end: number) => {
-      let worst = 0;
-      for (const p of placed) {
-        if (p.start <= start) worst = Math.max(worst, p.end + travelMinutes(p.v, v) - start);
-        if (p.start >= start) worst = Math.max(worst, end + travelMinutes(v, p.v) - p.start);
+    const entries = day.map((v) => ({ v, options: optionsFor(v) })).filter((e) => e.options) as { v: VisitInfo; options: Option[] }[];
+
+    // Try every combination (2–3 options each, a handful of visits a day);
+    // past MAX_EXHAUSTIVE free visits, keep their first option.
+    let best: Option[] = entries.map((e) => e.options[0]);
+    let bestScore = { worst: Infinity, total: Infinity, moved: Infinity };
+    const free = entries.map((e, i) => i).filter((i) => entries[i].options.length > 1).slice(0, MAX_EXHAUSTIVE);
+    const pick = entries.map(() => 0);
+    const visit = (k: number) => {
+      if (k === free.length) {
+        const chosen = entries.map((e, i) => e.options[pick[i]]);
+        const { worst, total } = lateness(chosen.map((o, i) => ({ v: entries[i].v, start: toMin(o.start), end: toMin(o.end) })), road);
+        const moved = pick.reduce((a, b) => a + b, 0);
+        if (
+          worst < bestScore.worst ||
+          (worst === bestScore.worst && (total < bestScore.total || (total === bestScore.total && moved < bestScore.moved)))
+        ) {
+          best = chosen;
+          bestScore = { worst, total, moved };
+        }
+        return;
       }
-      return worst;
+      for (let o = 0; o < entries[free[k]].options.length; o += 1) {
+        pick[free[k]] = o;
+        visit(k + 1);
+      }
+      pick[free[k]] = 0;
     };
+    visit(0);
 
-    const flexible: { v: VisitInfo; options: { start: string; end: string; label: string }[] }[] = [];
-    for (const v of day) {
-      const choice = choiceFor(v);
-      const resolved = resolveVisitWindow(v, choice, fallback);
-      if (!resolved) continue;
-      const mode = (choice ?? fallback).mode;
-      const range = classRange(v);
-      const hasOwnSlot = resolved.start === v.startTime && resolved.end === v.endTime;
-      if (!choice && mode === "recommended" && range && !hasOwnSlot) {
-        const first = resolveVisitWindow(v, { mode: "first" }, fallback)!;
-        const last = resolveVisitWindow(v, { mode: "last" }, fallback)!;
-        const options = [first, last].map((w) => ({ ...w, label: WINDOW_LABELS.recommended }));
-        flexible.push({ v, options: first.start === last.start ? [options[0]] : options });
-        continue;
+    const slots: Slot[] = entries.map((e, i) => ({ v: e.v, start: toMin(best[i].start), end: toMin(best[i].end) }));
+    const sorted = [...slots].sort((a, b) => a.start - b.start || a.end - b.end);
+    entries.forEach((e, i) => out.set(e.v, { start: best[i].start, end: best[i].end, label: best[i].label, conflict: null }));
+
+    for (let i = 1; i < sorted.length; i += 1) {
+      const prev = sorted[i - 1];
+      const cur = sorted[i];
+      const d = drive(prev.v, cur.v, road);
+      if (prev.end + d.minutes - cur.start <= LATE_TOLERANCE_MIN) continue;
+
+      // What would fix it: another slice of this visit, or of the one before,
+      // with everything else as it is.
+      const fixes: WindowFix[] = [];
+      for (const target of [cur, prev]) {
+        for (const o of allSlices(target.v)) {
+          if (toMin(o.start) === target.start) continue;
+          const trial = slots.map((s) => (s.v === target.v ? { ...s, start: toMin(o.start), end: toMin(o.end) } : s));
+          if (lateness(trial, road).worst === 0) {
+            fixes.push({
+              visit: target.v,
+              window: o.window,
+              text: `${target.v === cur.v ? "Here" : target.v.schoolName ?? "The visit before"}: ${o.label.toLowerCase()} (${o.start}–${o.end})`,
+            });
+          }
+        }
       }
-      placed.push({ v, start: toMin(resolved.start), end: toMin(resolved.end) });
-      out.set(v, { ...resolved, conflict: false });
-    }
-
-    // Earliest class first, each taking the first end of its class that fits.
-    flexible.sort((a, b) => toMin(a.options[0].start) - toMin(b.options[0].start));
-    for (const { v, options } of flexible) {
-      const scored = options.map((o) => ({ o, late: lateness(v, toMin(o.start), toMin(o.end)) }));
-      const pick = scored.find((x) => x.late <= LATE_TOLERANCE_MIN) ?? scored.reduce((a, b) => (b.late < a.late ? b : a));
-      placed.push({ v, start: toMin(pick.o.start), end: toMin(pick.o.end) });
-      out.set(v, { ...pick.o, conflict: false });
-    }
-
-    // Then flag anything still unreachable, the manager's own choices included.
-    placed.sort((a, b) => a.start - b.start);
-    for (let i = 1; i < placed.length; i += 1) {
-      const prev = placed[i - 1];
-      const cur = placed[i];
-      if (prev.end + travelMinutes(prev.v, cur.v) - cur.start > LATE_TOLERANCE_MIN) {
-        const w = out.get(cur.v);
-        if (w) out.set(cur.v, { ...w, conflict: true });
-      }
+      const w = out.get(cur.v)!;
+      out.set(cur.v, {
+        ...w,
+        conflict: {
+          fromSchool: prev.v.schoolName ?? "the visit before",
+          leaveAt: toHHMM(prev.end),
+          driveMinutes: d.minutes,
+          arriveAt: toHHMM(prev.end + d.minutes),
+          estimated: d.estimated,
+          fixes,
+        },
+      });
     }
   }
   return out;
