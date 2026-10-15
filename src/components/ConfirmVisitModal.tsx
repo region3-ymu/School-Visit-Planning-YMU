@@ -20,6 +20,7 @@ import TeacherObservationFields, {
   entriesToPayload,
   entryLabel,
   newObservationEntry,
+  MIN_OBSERVATION_NOTES,
   observationProblem,
   type ObservationChoices,
   type ObservationEntry,
@@ -34,7 +35,6 @@ type ChainState =
 // Enough to be a sentence, not enough to be a chore. A rating with no evidence
 // behind it is an opinion, and it is the RM's own name on it when somebody
 // asks about it months later.
-const MIN_OBSERVATION_NOTES = 15;
 
 const VISITED_WITH_OPTIONS: { value: string; label: string }[] = [
   { value: "PRINCIPAL", label: "Principal" },
@@ -466,7 +466,9 @@ export default function ConfirmVisitModal({
           {obsProblem && (
             <p className="text-sm text-amber-600 dark:text-amber-400">{obsProblem}</p>
           )}
-          {missingNotesFor.length > 0 && (
+          {/* One message at a time: observationProblem already names a
+              missing note when it is the first thing wrong. */}
+          {!obsProblem && missingNotesFor.length > 0 && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
               Add a line about what you saw or heard for{" "}
               {missingNotesFor.map((e) => entryLabel(e, choices)).join(" and ")} before

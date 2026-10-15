@@ -983,6 +983,27 @@ function observationHasContent(o: ObservationInput): boolean {
   );
 }
 
+/** Same minimum as the forms (MIN_OBSERVATION_NOTES in TeacherObservationFields). */
+const MIN_OBSERVATION_NOTES = 15;
+
+/**
+ * What a "Yes — I observed it" must carry (Emilio, 2026-10-15): at least one
+ * class, and for each class a rating in at least one of the five domains and
+ * written evidence. Checked here as well as in the forms, so a stale or
+ * hand-made request cannot save an empty evaluation for a teacher to receive.
+ * Null when it holds; otherwise the message to show.
+ */
+function observationRuleError(list: ObservationInput[]): string | null {
+  if (list.length === 0) return "Add the class you observed.";
+  for (const o of list) {
+    if (!RATING_KEYS.some((k) => !!o[k])) return "Rate at least one area for each class you observed.";
+    if ((o.notes?.trim().length ?? 0) < MIN_OBSERVATION_NOTES) {
+      return `Write your notes and evidence for each class you observed (at least ${MIN_OBSERVATION_NOTES} characters).`;
+    }
+  }
+  return null;
+}
+
 /** The columns of a VisitObservation, from what a form sent. */
 function observationRow(o: ObservationInput) {
   return {
@@ -1339,7 +1360,11 @@ async function observationsForNewVisit(
   inferSubject: () => Promise<string | undefined>,
 ): Promise<ObservationInput[]> {
   if (!canHoldObservations(data)) return [];
-  if (data.observations) return data.observations.filter(observationHasContent);
+  if (data.observations) {
+    const problem = observationRuleError(data.observations);
+    if (problem) throw new Error(problem);
+    return data.observations.filter(observationHasContent);
+  }
   const legacy = legacyObservation(data) ?? {};
   if (!legacy.subjectId) legacy.subjectId = (await inferSubject()) ?? null;
   return observationHasContent(legacy) ? [legacy] : [];
@@ -2197,6 +2222,10 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
   // replacing the whole list with it would silently delete the second class
   // somebody rated from a newer phone.
   const legacyPatch = data.observations === undefined ? legacyEditPatch(data) : null;
+  if (nowObserving && data.observations !== undefined) {
+    const problem = observationRuleError(data.observations);
+    if (problem) throw new Error(problem);
+  }
 
   const visit = await prisma.$transaction(async (tx) => {
     const updated = await tx.visit.update({

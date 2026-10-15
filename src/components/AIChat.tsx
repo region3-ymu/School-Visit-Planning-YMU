@@ -23,7 +23,7 @@ export default function AIChat() {
             <button
                 onClick={() => setIsOpen(true)}
                 aria-label="Open planning assistant"
-                className={`fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-4 sm:right-6 p-4 rounded-full bg-indigo-600 text-white shadow-lg hover:bg-indigo-700 transition-transform duration-300 z-50 ${isOpen ? 'scale-0' : 'scale-100'}`}
+                className={`fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-4 sm:right-6 p-4 rounded-full bg-indigo-600 text-white shadow-lg hover:bg-indigo-700 transition-transform duration-300 z-40 ${isOpen ? 'scale-0' : 'scale-100'}`}
             >
                 <MessageSquare size={24} />
             </button>
@@ -34,7 +34,7 @@ export default function AIChat() {
                 width on anything bigger; the height follows dvh for the same
                 reason the app shell does. */}
             <div
-                className={`fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-4 sm:right-6 w-[calc(100vw-2rem)] max-w-96 h-[min(32rem,70dvh)] bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-50 transition-all duration-300 transform origin-bottom-right ${isOpen ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none'}`}
+                className={`fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-4 sm:right-6 w-[calc(100vw-2rem)] max-w-96 h-[min(32rem,70dvh)] bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-40 transition-all duration-300 transform origin-bottom-right ${isOpen ? 'scale-100 opacity-100' : 'scale-0 opacity-0 pointer-events-none'}`}
             >
                 {/* Header */}
                 <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-zinc-800 bg-indigo-600 text-white rounded-t-2xl">

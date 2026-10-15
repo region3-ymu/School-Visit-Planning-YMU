@@ -27,6 +27,10 @@ export const UPDATES: UpdateEntry[] = [
     items: [
       {
         module: "Visits",
+        text: "\"Yes — I observed it\" now requires, for every class you tick, a rating in at least one of the five areas and your notes and evidence. The rating form also fits a phone screen, and the chat button no longer covers Confirm Visit.",
+      },
+      {
+        module: "Visits",
         text: "When two classes run at the same time in the same place (Carol City MS, North Dade), you can now tick every class you observed under \"Which classes did you observe?\" — each gets its own ratings and its own notes. Each teacher sees only their own evaluation in YMU-A. A class that isn't in the list can still be added with \"Other / not listed\".",
       },
       {

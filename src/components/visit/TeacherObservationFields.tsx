@@ -174,10 +174,15 @@ export function entryLabel(e: ObservationEntry, choices: ObservationChoices): st
  * be ticked when there are classes to tick, for the same reason. And the same
  * class twice would send one teacher two evaluations for one lesson.
  */
+/** Evidence is required for every class observed; the server holds the same line. */
+export const MIN_OBSERVATION_NOTES = 15;
+
 export function observationProblem(entries: ObservationEntry[], choices: ObservationChoices): string | null {
   const hasOptions = choices.classes.length > 0 || choices.teachers.length > 0;
-  if (hasOptions && entries.length === 0) {
-    return "Tick the class you observed — the evaluation is shared with its teacher.";
+  if (entries.length === 0) {
+    return hasOptions
+      ? "Tick the class you observed — the evaluation is shared with its teacher."
+      : "Add the class you observed (Other / not listed).";
   }
   if (choices.teachers.length > 0 && entries.some((e) => !e.teacherId)) {
     return "Choose the teacher for each class you observed — the evaluation is shared with them.";
@@ -187,6 +192,17 @@ export function observationProblem(entries: ObservationEntry[], choices: Observa
     const k = classKey(e.subjectId, e.teacherId);
     if (seen.has(k)) return `${entryLabel(e, choices)} is listed twice — remove one.`;
     seen.add(k);
+  }
+  // Emilio, 2026-10-15: "Yes — I observed it" means at least one domain rated
+  // and evidence written, for every class — an evaluation a teacher receives
+  // with nothing in it says nothing.
+  for (const e of entries) {
+    if (!Object.values(e.ratings).some(Boolean)) {
+      return `${entryLabel(e, choices)}: rate at least one of the five areas.`;
+    }
+    if (e.notes.trim().length < MIN_OBSERVATION_NOTES) {
+      return `${entryLabel(e, choices)}: write your notes and evidence (at least ${MIN_OBSERVATION_NOTES} characters).`;
+    }
   }
   return null;
 }
@@ -369,7 +385,9 @@ export default function TeacherObservationFields({
           </div>
 
           {entries.length > 0 && (
-            <p className="text-xs text-gray-400 mb-2">Skip a domain if you didn&apos;t see it this visit.</p>
+            <p className="text-xs text-gray-400 mb-2">
+              For each class: rate at least one area (skip any you didn&apos;t see) and write your evidence.
+            </p>
           )}
 
           <div className="space-y-4">
@@ -378,7 +396,7 @@ export default function TeacherObservationFields({
               return (
                 <div
                   key={entry.key}
-                  className="rounded-lg border border-gray-200 dark:border-zinc-700 p-3 space-y-3"
+                  className="min-w-0 rounded-lg border border-gray-200 dark:border-zinc-700 p-2.5 sm:p-3 space-y-3"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300 min-w-0">
@@ -443,9 +461,12 @@ export default function TeacherObservationFields({
 
                   {OBSERVATION_DOMAINS.map((domain) => (
                     <div key={domain.key}>
-                      <div className="flex justify-between items-baseline mb-1 gap-2">
-                        <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{domain.title}</span>
-                        <span className="text-[11px] text-gray-400 text-right shrink-0">{domain.hint}</span>
+                      {/* Hint under the title: side by side, a long hint
+                          ("Routines, relationships, transitions") pushed the
+                          row past the card's edge on a phone. */}
+                      <div className="mb-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-700 dark:text-gray-200">{domain.title}</p>
+                        <p className="text-[11px] text-gray-400">{domain.hint}</p>
                       </div>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                         {RATING_OPTIONS.map((opt) => (
@@ -453,7 +474,7 @@ export default function TeacherObservationFields({
                             key={opt.value}
                             type="button"
                             onClick={() => setRating(entry, domain.key, opt.value)}
-                            className={`px-2 py-2 rounded-lg border text-xs font-medium transition-colors ${
+                            className={`min-w-0 px-1.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                               entry.ratings[domain.key] === opt.value
                                 ? "border-indigo-600 bg-indigo-600 text-white"
                                 : "border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-gray-300"
@@ -466,7 +487,9 @@ export default function TeacherObservationFields({
                     </div>
                   ))}
                   <div>
-                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">Your notes and evidence</p>
+                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400 mb-1">
+                      Your notes and evidence <span className="text-red-500">*</span>
+                    </p>
                     <textarea
                       placeholder="What did you see or hear that supports these ratings?"
                       value={entry.notes}
