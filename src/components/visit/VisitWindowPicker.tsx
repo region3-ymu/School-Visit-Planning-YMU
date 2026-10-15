@@ -1,45 +1,49 @@
 "use client";
 
 import { useState } from "react";
-import { CalendarClock } from "lucide-react";
-import type { VisitInfo } from "@/lib/types";
-import {
-  resolveVisitWindow,
-  WINDOW_LABELS,
-  type VisitWindow,
-  type WindowMode,
-} from "@/lib/visitWindow";
+import { AlertTriangle, CalendarClock } from "lucide-react";
+import { WINDOW_LABELS, type ResolvedWindow, type VisitWindow, type WindowMode } from "@/lib/visitWindow";
 
 /**
  * "On your calendar: 11:25–11:45 · First 20 min" under a visit, and the
  * choice behind it (#55). Untouched visits follow the week's default; picking
  * here overrides it for this visit only, and "Use default" goes back.
+ * `resolved` comes from resolveDayWindows, which sees the whole day: the
+ * default may take the last 20 minutes to stay clear of another visit, and a
+ * visit that can't be reached in time is flagged.
  */
 export default function VisitWindowPicker({
-  visit,
+  resolved,
   choice,
   fallback,
   onChange,
   editable,
 }: {
-  visit: VisitInfo;
+  resolved: ResolvedWindow | null;
   choice: VisitWindow | undefined;
   fallback: VisitWindow;
   onChange: (w: VisitWindow | null) => void;
   editable: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const resolved = resolveVisitWindow(visit, choice, fallback);
   if (!resolved) return null;
 
   const mode: WindowMode | "default" = choice?.mode ?? "default";
   const summary = `${resolved.start}–${resolved.end} · ${resolved.label}${choice ? "" : " (default)"}`;
+  const conflict = resolved.conflict && (
+    <p className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400">
+      <AlertTriangle size={12} className="shrink-0" /> Not enough time to get here from the visit before — pick another slice or move one.
+    </p>
+  );
 
   if (!editable) {
     return (
-      <p className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400 mb-2">
-        <CalendarClock size={12} /> On your calendar: {summary}
-      </p>
+      <div className="mb-2">
+        <p className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400">
+          <CalendarClock size={12} /> On your calendar: {summary}
+        </p>
+        {conflict}
+      </div>
     );
   }
 
@@ -54,6 +58,7 @@ export default function VisitWindowPicker({
       >
         <CalendarClock size={12} className="shrink-0" /> On your calendar: {summary}
       </button>
+      {conflict}
       {open && (
         <div className="mt-1.5 grid gap-1.5 rounded-lg border border-gray-200 dark:border-zinc-700 p-2 text-xs">
           <select

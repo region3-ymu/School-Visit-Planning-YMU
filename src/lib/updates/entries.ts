@@ -34,6 +34,14 @@ export const UPDATES: UpdateEntry[] = [
         text: "Changing a visit's slice and sending it to Google Calendar again moves the event that's already there instead of adding a second one.",
       },
       {
+        module: "Weekly Planner",
+        text: "Postponing a visit to another day now takes that day's class: before, it kept the original day's class, and the calendar could put the visit at an hour with no class at all (Little River, Thursday at 12:30).",
+      },
+      {
+        module: "Weekly Planner",
+        text: "Visits on the same day no longer land on the same 20 minutes. Two classes at the same time (Henry E. S. Reeves and Lakeview, 1:05–2:05) get the first 20 minutes of one and the last 20 of the other, allowing for the drive. If a visit can't be reached in time, its card says so.",
+      },
+      {
         module: "Visit History",
         text: "When you observed a class (\"Yes — I observed it\"), the teacher now sees your ratings, notes and name under Evaluations in YMU-A, and is notified. Choosing which teacher you observed is required for that. Nothing else from the visit is shared.",
       },

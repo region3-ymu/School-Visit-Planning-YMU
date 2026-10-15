@@ -22,7 +22,7 @@ import { ViableOption, VisitInfo } from "@/lib/types";
 
 import ConfirmVisitModal from "./ConfirmVisitModal";
 import VisitWindowPicker from "./visit/VisitWindowPicker";
-import { resolveVisitWindow, visitWindowKey, WINDOW_LABELS, type WindowMode } from "@/lib/visitWindow";
+import { resolveDayWindows, visitWindowKey, WINDOW_LABELS, type WindowMode } from "@/lib/visitWindow";
 
 const FREQ_BADGE: Record<string, { label: string; cls: string }> = {
     WEEKLY: { label: "Weekly", cls: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" },
@@ -130,6 +130,17 @@ export default function WeeklyPlanner({
         { status: "idle" | "sending" } | { status: "done"; text: string } | { status: "error"; text: string }
     >({ status: "idle" });
 
+    // #55 follow-up: every visit's calendar window, worked out per day so two
+    // visits that day don't land on the same 20 minutes (Henry E. S. Reeves
+    // and Lakeview, 2026-10-15). The cards and the export both read this.
+    const windowKeyOf = (v: VisitInfo) => visitWindowKey(v.schoolId, dayKeyOf(v.date), v.classStartTime ?? v.startTime);
+    const resolvedWindows = resolveDayWindows(
+        plannedVisits.filter((v) => !v.isSkipped),
+        (v) => visitWindows[windowKeyOf(v)],
+        calendarWindowDefault,
+        (v) => dayKeyOf(v.date),
+    );
+
     type CalendarScope = { kind: "week" } | { kind: "day"; dayKey: string } | { kind: "visit"; visit: VisitInfo };
     const sendToCalendar = async (scope: CalendarScope = { kind: "week" }) => {
         const hhmm = /^\d{2}:\d{2}$/;
@@ -140,11 +151,7 @@ export default function WeeklyPlanner({
                 // #55: the slice of the class the manager chose for this
                 // visit, or the week's default — not whatever times the visit
                 // happened to carry.
-                const window = resolveVisitWindow(
-                    v,
-                    visitWindows[visitWindowKey(v.schoolId, dayKeyOf(v.date), v.classStartTime ?? v.startTime)],
-                    calendarWindowDefault,
-                );
+                const window = resolvedWindows.get(v);
                 const startTime = window?.start;
                 const endTime = window?.end;
                 return {
@@ -304,7 +311,7 @@ export default function WeeklyPlanner({
     // read back on the server as a calendar day, and handing it a Date carrying
     // the browser's current time of day is how a visit moved to a Thursday
     // could be filed under the Wednesday.
-    const handlePostponeToDay = (schoolId: string, originalDate: Date, targetDayKey: string | null, startTime?: string, endTime?: string) => {
+    const handlePostponeToDay = (schoolId: string, originalDate: Date, targetDayKey: string | null, startTime?: string, endTime?: string, className?: string) => {
 
         // Order matters, and the store relies on it: the skip is recorded
         // first, and it clears any pin that was holding this school on this day
@@ -342,6 +349,12 @@ export default function WeeklyPlanner({
 
             if (movingVisit) {
 
+                // The class is the new day's, not the old one's. Spreading the
+                // old card kept Wednesday's 12:30–13:50 Beginning Band as the
+                // class period, so the calendar window ("first 20 min of the
+                // class") put a Thursday visit at 12:30, when Little River has
+                // no class then (Emilio, 2026-10-15). The server fills in the
+                // subject and teacher just below.
                 updatedVisits.push({
 
                     ...movingVisit,
@@ -351,6 +364,17 @@ export default function WeeklyPlanner({
                     startTime: startTime || movingVisit.startTime,
 
                     endTime: endTime || movingVisit.endTime,
+
+                    ...(startTime && endTime
+                        ? {
+                              classStartTime: startTime,
+                              classEndTime: endTime,
+                              subjectName: className,
+                              subjectId: undefined,
+                              teacherId: undefined,
+                              teacherName: undefined,
+                          }
+                        : {}),
 
                     isPinned: true
 
@@ -383,6 +407,27 @@ export default function WeeklyPlanner({
         setPlannedVisits(updatedVisits);
 
         setPostponeModalData(null);
+
+        // The same card "Add visit" builds: the class at that slot, its
+        // subject and teacher. Applied only if the planner is still on this
+        // week, so a slow answer never lands in another week's plan.
+        if (targetDayKey && startTime && endTime) {
+            const forWeek = weekStartKey;
+            getManualVisit(schoolId, targetDayKey, startTime, endTime)
+                .then((card) => {
+                    const state = usePlannerStore.getState();
+                    const nowWeek = format(startOfWeek(new Date(state.weekStartDateStr), { weekStartsOn: 1 }), "yyyy-MM-dd");
+                    if (!card || nowWeek !== forWeek) return;
+                    state.setPlannedVisits(
+                        state.plannedVisits.map((v) =>
+                            v.schoolId === schoolId && dayKeyOf(v.date) === targetDayKey && v.startTime === startTime
+                                ? { ...card, isPinned: true }
+                                : v,
+                        ),
+                    );
+                })
+                .catch((e) => console.error(e));
+        }
 
     };
 
@@ -987,10 +1032,10 @@ export default function WeeklyPlanner({
 
                                                 {!visit.isSkipped && (
                                                     <VisitWindowPicker
-                                                        visit={visit}
-                                                        choice={visitWindows[visitWindowKey(visit.schoolId, dayKeyOf(visit.date), visit.classStartTime ?? visit.startTime)]}
+                                                        resolved={resolvedWindows.get(visit) ?? null}
+                                                        choice={visitWindows[windowKeyOf(visit)]}
                                                         fallback={calendarWindowDefault}
-                                                        onChange={(w) => setVisitWindow(visitWindowKey(visit.schoolId, dayKeyOf(visit.date), visit.classStartTime ?? visit.startTime), w)}
+                                                        onChange={(w) => setVisitWindow(windowKeyOf(visit), w)}
                                                         editable={canPlan}
                                                     />
                                                 )}
@@ -1260,7 +1305,7 @@ export default function WeeklyPlanner({
 
                                                                 key={`${dateStr}-${opt.rule.start}-${opt.rule.end}-${oIdx}`}
 
-                                                                onClick={() => handlePostponeToDay(postponeModalData.schoolId, postponeModalData.visitDate, dateStr, opt.rule.start, opt.rule.end)}
+                                                                onClick={() => handlePostponeToDay(postponeModalData.schoolId, postponeModalData.visitDate, dateStr, opt.rule.start, opt.rule.end, opt.rule.class)}
 
                                                                 className="px-3 py-2 text-sm border rounded-lg hover:bg-indigo-50 hover:border-indigo-200 dark:hover:bg-indigo-900/30 dark:hover:border-indigo-800 transition-colors text-left flex flex-col gap-0.5 border-gray-200 dark:border-zinc-700 font-medium"
 
