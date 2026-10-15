@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
     deleteVisitLog, editVisitLog, getQuarters, getMyHomeLocation, setMyHomeLocation,
-    getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getSchoolSubjects, getSchoolTeachers,
+    getMyDayStatus, getOfficeLocations, getPreviousVisitToday, getObservationChoices,
 } from "@/app/actions";
 import { format, isToday } from "date-fns";
 import { History, Plus, CheckCircle, Edit2, Trash2, Download, Car, ChevronDown, ChevronLeft, ChevronRight, Route } from "lucide-react";
@@ -13,11 +13,14 @@ import DayRouteModal from "./visit/DayRouteModal";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
-    EMPTY_OBSERVATIONS,
-    type ObservationDomainKey,
-    type ObservationRating,
+    EMPTY_CHOICES,
+    entriesToPayload,
+    entryFromSaved,
+    newObservationEntry,
+    observationProblem,
+    type ObservationChoices,
+    type ObservationEntry,
     type ObservationSkipReason,
-    type ObservationState,
 } from "./visit/TeacherObservationFields";
 import { addDaysToDayKey, dayKeyInAppZone, mondayOfDayKey, zonedDayStart } from "@/lib/timezone";
 import { usePlannerStore } from "@/store/plannerStore";
@@ -123,19 +126,12 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [gpsError, setGpsError] = useState<string | null>(null);
     const [gpsLoading, setGpsLoading] = useState(false);
     const [vehicle, setVehicle] = useState<VehicleType>("PERSONAL");
-    // Who was observed. A manual entry has no class slot to read it from, so it
-    // is asked — but only from the teachers who actually work that school.
-    type SchoolTeacher = Awaited<ReturnType<typeof getSchoolTeachers>>[number];
-    const [schoolTeachers, setSchoolTeachers] = useState<SchoolTeacher[]>([]);
-    const [observedTeacherId, setObservedTeacherId] = useState("");
-    // Which programme was in the room. Captured automatically from the class
-    // slot when the planner books a visit, but a manual entry has no slot — and
-    // neither did the 42 visits the backfill reached, nor the 46 it refused to
-    // guess at because the school ran two programmes that day. Those are the
-    // ones this asks about.
-    type SchoolSubject = Awaited<ReturnType<typeof getSchoolSubjects>>[number];
-    const [schoolSubjects, setSchoolSubjects] = useState<SchoolSubject[]>([]);
-    const [observedSubjectId, setObservedSubjectId] = useState("");
+    // Which classes were observed, one block of ratings each. A manual entry
+    // has no class slot to read them from, so it asks — from the classes that
+    // school actually ran that day, with "Other / not listed" for the rest.
+    const [observationEntries, setObservationEntries] = useState<ObservationEntry[]>([]);
+    const [choices, setChoices] = useState<ObservationChoices>(EMPTY_CHOICES);
+    const [choicesLoading, setChoicesLoading] = useState(false);
     // What the server will actually chain from for the date being logged. The
     // origin picker only matters when this comes back empty — asking anyway made
     // it look as though an earlier stop that day had been forgotten.
@@ -146,8 +142,6 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
     const [principalNotes, setPrincipalNotes] = useState("");
     const [hasInstrumentRequest, setHasInstrumentRequest] = useState(false);
     const [instrumentRequestDetails, setInstrumentRequestDetails] = useState("");
-    const [observations, setObservations] = useState<ObservationState>(EMPTY_OBSERVATIONS);
-    const [obsNotes, setObsNotes] = useState("");
     const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
     const [obsSkipNotes, setObsSkipNotes] = useState("");
     const [formError, setFormError] = useState<string | null>(null);
@@ -239,50 +233,36 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         return () => { cancelled = true; };
     }, [showModal, editingId, visitIso]);
 
-    // Reloaded whenever the school changes; picking a different school must not
-    // leave the previous school's teacher selected.
+    // Reloaded whenever the school or the date changes: a school that
+    // alternates two classes through one slot has a different class, and a
+    // different teacher, depending on the day.
     useEffect(() => {
-        if (!selectedSchool || !visitIso) { setSchoolSubjects([]); return; }
+        if (!selectedSchool || !visitIso) { setChoices(EMPTY_CHOICES); return; }
         let cancelled = false;
-        getSchoolSubjects(selectedSchool, visitIso).then((list) => {
-            if (cancelled) return;
-            setSchoolSubjects(list);
-            setObservedSubjectId((prev) => {
-                if (list.some((x) => x.id === prev)) return prev;
-                // Only preselect when the day leaves no choice — the same line
-                // the backfill draws, for the same reason.
-                const taught = list.filter((x) => x.taughtOnDate);
-                if (taught.length === 1) return taught[0].id;
-                return list.length === 1 ? list[0].id : "";
-            });
-        });
+        setChoicesLoading(true);
+        getObservationChoices(selectedSchool, visitIso)
+            .then((next) => {
+                if (cancelled) return;
+                setChoices(next);
+                // A new log with nothing ticked yet: tick the class only when
+                // the day leaves no choice — the same line the backfill draws,
+                // for the same reason. An edit keeps exactly what was saved.
+                if (!editingId) {
+                    const ran = next.classes.filter((c) => c.ranOnDate);
+                    setObservationEntries((prev) =>
+                        prev.length === 0 && ran.length === 1
+                            ? [newObservationEntry(ran[0].subjectId, ran[0].teacherId)]
+                            : prev
+                    );
+                }
+            })
+            .catch(() => { if (!cancelled) setChoices(EMPTY_CHOICES); })
+            .finally(() => { if (!cancelled) setChoicesLoading(false); });
         return () => { cancelled = true; };
-    }, [selectedSchool, visitIso]);
-
-    useEffect(() => {
-        if (!selectedSchool || !visitIso) { setSchoolTeachers([]); return; }
-        let cancelled = false;
-        // Keyed on the date too: a school that alternates two classes through one
-        // slot has a different teacher depending on the day.
-        getSchoolTeachers(selectedSchool, visitIso).then((list) => {
-            if (cancelled) return;
-            setSchoolTeachers(list);
-            setObservedTeacherId((prev) => {
-                if (list.some((t) => t.id === prev)) return prev;
-                // Whoever actually taught that day, else the only candidate.
-                const taught = list.filter((t) => t.teachingOnDate);
-                if (taught.length === 1) return taught[0].id;
-                return list.length === 1 ? list[0].id : "";
-            });
-        });
-        return () => { cancelled = true; };
-    }, [selectedSchool, visitIso]);
+    }, [selectedSchool, visitIso, editingId]);
 
     const toggleVisitedWith = (value: string) =>
         setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
-
-    const setObservation = (key: ObservationDomainKey, value: ObservationRating) =>
-        setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
 
     const otherSchoolsByRegion = otherSchools.reduce<Record<string, typeof otherSchools>>((acc, s) => {
         (acc[s.regionName] ||= []).push(s);
@@ -303,14 +283,12 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setMode("IN_PERSON");
         setOriginMode("home");
         setVehicle("PERSONAL");
-        setObservedTeacherId("");
+        setObservationEntries([]);
         setCustomAddress("");
         setVisitedWith([]);
         setPrincipalNotes("");
         setHasInstrumentRequest(false);
         setInstrumentRequestDetails("");
-        setObservations(EMPTY_OBSERVATIONS);
-        setObsNotes("");
         setObsSkipReason(null);
         setObsSkipNotes("");
         setFormError(null);
@@ -380,12 +358,11 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
         setPrincipalNotes(log.principalNotes ?? "");
         setHasInstrumentRequest(log.hasInstrumentRequest ?? false);
         setInstrumentRequestDetails(log.instrumentRequestDetails ?? "");
-        setObservations({ ...EMPTY_OBSERVATIONS, ...(log.observations ?? {}) } as ObservationState);
-        setObsNotes(log.obsNotes ?? "");
+        // Each saved observation keeps its id, so saving the edit updates it
+        // in place — the id is what YMU-A files the teacher's evaluation under.
+        setObservationEntries((log.observations ?? []).map(entryFromSaved));
         setObsSkipReason((log.obsSkipReason as ObservationSkipReason | null) ?? null);
         setObsSkipNotes(log.obsSkipNotes ?? "");
-        setObservedTeacherId(log.observedTeacherId ?? "");
-        setObservedSubjectId(log.observedSubjectId ?? "");
         setShowModal(true);
     };
 
@@ -407,11 +384,24 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
 
         // #56: an observation goes to the teacher's Evaluations in YMU-A, so
         // it has to say whose class it was. "Not recorded" is how 14 of the
-        // first 105 observations ended up belonging to nobody.
-        if (showTeacherObservation && !obsSkipReason && schoolTeachers.length > 0 && !observedTeacherId) {
-            setFormError("Choose which teacher you observed — the evaluation is shared with them.");
-            return;
+        // first 105 observations ended up belonging to nobody. Now per class:
+        // at least one ticked when there are classes to tick, and a teacher on
+        // each.
+        if (showTeacherObservation && !obsSkipReason) {
+            if (choicesLoading) {
+                setFormError("Still loading the school's classes — try again in a moment.");
+                return;
+            }
+            const problem = observationProblem(observationEntries, choices);
+            if (problem) {
+                setFormError(problem);
+                return;
+            }
         }
+        // Always sent, even empty — see ConfirmVisitModal. Only the classes
+        // actually observed, and none on a skipped, remote or office visit.
+        const observationsPayload =
+            showTeacherObservation && !obsSkipReason ? entriesToPayload(observationEntries) : [];
 
         setLoading(true);
         const isoDate = new Date(visitDate + "T12:00:00Z").toISOString();
@@ -425,19 +415,9 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     principalNotes: showTalkAbout ? principalNotes.trim() : "",
                     hasInstrumentRequest,
                     instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
-                    obsPlanningPrep: observations.obsPlanningPrep,
-                    obsCultureManagement: observations.obsCultureManagement,
-                    obsInstructionMusicianship: observations.obsInstructionMusicianship,
-                    obsEngagementEvidence: observations.obsEngagementEvidence,
-                    obsProfessionalismGrowth: observations.obsProfessionalismGrowth,
-                    obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() : "",
+                    observations: observationsPayload,
                     obsSkipReason: showTeacherObservation ? obsSkipReason : null,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() : "",
-                    observedTeacherId: showTeacherObservation ? observedTeacherId || null : null,
-                    // Not gated on the rubric, unlike the teacher: which
-                    // programme was running is true whether or not anybody was
-                    // rated, which is how confirmVisit records it too.
-                    observedSubjectId: observedSubjectId || null,
                 });
             } else {
                 // Only the first in-person visit of the day needs an origin; the server
@@ -482,16 +462,9 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                     principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
                     hasInstrumentRequest,
                     instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
-                    obsPlanningPrep: observations.obsPlanningPrep ?? undefined,
-                    obsCultureManagement: observations.obsCultureManagement ?? undefined,
-                    obsInstructionMusicianship: observations.obsInstructionMusicianship ?? undefined,
-                    obsEngagementEvidence: observations.obsEngagementEvidence ?? undefined,
-                    obsProfessionalismGrowth: observations.obsProfessionalismGrowth ?? undefined,
-                    obsNotes: showTeacherObservation && !obsSkipReason ? obsNotes.trim() || undefined : undefined,
+                    observations: observationsPayload,
                     obsSkipReason: showTeacherObservation ? obsSkipReason ?? undefined : undefined,
                     obsSkipNotes: showTeacherObservation && obsSkipReason ? obsSkipNotes.trim() || undefined : undefined,
-                    observedTeacherId: showTeacherObservation ? observedTeacherId || undefined : undefined,
-                    observedSubjectId: observedSubjectId || undefined,
                     // Same rule as ConfirmVisitModal: anything short of a
                     // passed check — an earlier day, no fix, an override — is
                     // recorded as unverified.
@@ -808,7 +781,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">School</label>
                                     <select
                                         value={isOtherRegionPick ? "" : selectedSchool}
-                                        onChange={(e) => setSelectedSchool(e.target.value)}
+                                        onChange={(e) => { setSelectedSchool(e.target.value); setObservationEntries([]); }}
                                         disabled={!!editingId}
                                         className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                     >
@@ -828,7 +801,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Other region school</label>
                                         <select
                                             value={isOtherRegionPick ? selectedSchool : ""}
-                                            onChange={(e) => setSelectedSchool(e.target.value)}
+                                            onChange={(e) => { setSelectedSchool(e.target.value); setObservationEntries([]); }}
                                             disabled={!!editingId}
                                             className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm focus:ring-2 focus:ring-indigo-500 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                                         >
@@ -986,55 +959,12 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                                         </div>
                                     )}
 
-                                    {schoolSubjects.length > 0 && (
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                                Which program?
-                                            </label>
-                                            <select
-                                                value={observedSubjectId}
-                                                onChange={(e) => setObservedSubjectId(e.target.value)}
-                                                className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm text-gray-900 dark:text-gray-100"
-                                            >
-                                                <option value="">Not recorded</option>
-                                                {schoolSubjects.map((sub) => (
-                                                    <option key={sub.id} value={sub.id}>
-                                                        {sub.name}
-                                                        {sub.taughtOnDate ? " (ran that day)" : ""}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    )}
-
-                                    {showTeacherObservation && schoolTeachers.length > 0 && (
-                                        <div>
-                                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                                                Which teacher?
-                                            </label>
-                                            <select
-                                                value={observedTeacherId}
-                                                onChange={(e) => setObservedTeacherId(e.target.value)}
-                                                className="w-full bg-gray-50 dark:bg-zinc-950 border border-gray-200 dark:border-zinc-800 rounded-lg p-3 text-sm text-gray-900 dark:text-gray-100"
-                                            >
-                                                <option value="">{obsSkipReason ? "Not recorded" : "Choose the teacher you observed…"}</option>
-                                                {schoolTeachers.map((t) => (
-                                                    <option key={t.id} value={t.id}>
-                                                        {t.name}
-                                                        {t.subjectsHere.length > 0 ? ` — ${t.subjectsHere.join(", ")}` : ""}
-                                                        {t.teachingOnDate ? " (taught that day)" : ""}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </div>
-                                    )}
-
                                     {showTeacherObservation && (
                                         <TeacherObservationFields
-                                            observations={observations}
-                                            onObservationChange={setObservation}
-                                            notes={obsNotes}
-                                            onNotesChange={setObsNotes}
+                                            entries={observationEntries}
+                                            onEntriesChange={setObservationEntries}
+                                            choices={choices}
+                                            loadingChoices={choicesLoading}
                                             skipReason={obsSkipReason}
                                             onSkipReasonChange={setObsSkipReason}
                                             skipNotes={obsSkipNotes}

@@ -26,8 +26,16 @@ export const UPDATES: UpdateEntry[] = [
     date: "2026-10-15",
     items: [
       {
+        module: "Visits",
+        text: "When two classes run at the same time in the same place (Carol City MS, North Dade), you can now tick every class you observed under \"Which classes did you observe?\" — each gets its own ratings and its own notes. Each teacher sees only their own evaluation in YMU-A. A class that isn't in the list can still be added with \"Other / not listed\".",
+      },
+      {
         module: "Schools",
         text: "Schools can be put On hold (ours, but no classes yet) or marked Inactive (we no longer work there, or it closed), from the school's page — by Admin, Operations or that region's Regional Manager. On hold: never proposed by the planner, not counted in the dashboard, no \"Never visited\" or \"Overdue\"; a visit can still be logged there. Inactive: hidden everywhere except visit history; find it under School Directory → Inactive to bring it back. A school that resumes counts its visits from that day.",
+      },
+      {
+        module: "Dashboard",
+        text: "Lists show classes, not only schools: Overdue, Due and Never visited name the classes each school teaches, and \"Visited\" shows which classes those visits observed (e.g. \"Drumline ×3 · Beginning Band ×1\").",
       },
       {
         module: "Dashboard",

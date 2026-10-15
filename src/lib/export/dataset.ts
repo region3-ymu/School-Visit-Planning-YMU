@@ -57,14 +57,18 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
         milesDriven: true, returnMilesDriven: true, commuteMiles: true, returnCommuteMiles: true,
         originLabel: true, geofenceDistanceM: true, geofenceOverridden: true, visitedWith: true,
         principalNotes: true, hasInstrumentRequest: true, instrumentRequestDetails: true,
-        obsPlanningPrep: true, obsCultureManagement: true, obsInstructionMusicianship: true,
-        obsEngagementEvidence: true, obsProfessionalismGrowth: true, obsNotes: true,
         obsSkipReason: true, obsSkipNotes: true, createdAt: true,
-        observedTeacherId: true, observedSubjectId: true,
         school: { select: { id: true, name: true, region: { select: { code: true } } } },
         visitedBy: { select: { email: true, name: true, role: true, region: { select: { code: true } } } },
-        observedTeacher: { select: { name: true } },
-        observedSubject: { select: { name: true } },
+        observations: {
+          select: {
+            id: true, teacherId: true, subjectId: true, notes: true,
+            obsPlanningPrep: true, obsCultureManagement: true, obsInstructionMusicianship: true,
+            obsEngagementEvidence: true, obsProfessionalismGrowth: true,
+            teacher: { select: { name: true } }, subject: { select: { name: true } },
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        },
       },
       orderBy: { plannedStartDateTime: "desc" },
     }),
@@ -92,7 +96,7 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
     }),
     prisma.subject.findMany({
       select: { id: true, name: true, description: true,
-                _count: { select: { classSessions: true, observedVisits: true } } },
+                _count: { select: { classSessions: true, observations: true } } },
       orderBy: { name: "asc" },
     }),
     prisma.quarter.findMany({ orderBy: [{ schoolYear: "asc" }, { label: "asc" }] }),
@@ -147,6 +151,11 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
           // a different thing and already has a meaning here.
           const reimbursable =
             v.vehicle === "YMU_VAN" || v.vehicle === "OTHER_PERSON_CAR" ? 0 : Math.max(0, out + back - commute);
+          // A visit can now watch several classes; every one of them is a row
+          // on the Observations tab. These columns keep the FIRST, so the
+          // tab's layout — and every formula and pivot pointing at it — does
+          // not shift. Read the Observations tab for the rest.
+          const o = v.observations[0];
           return [
             v.id, date(v.plannedStartDateTime), time(v.plannedStartDateTime), v.school.name, v.school.id,
             v.school.region?.code ?? "", v.status, v.mode, v.vehicle,
@@ -172,14 +181,36 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
             reimbursable, v.originLabel ?? "",
             v.geofenceDistanceM ?? "", v.geofenceOverridden,
             v.visitedWith.join(", "),
-            v.observedSubject?.name ?? "", v.observedSubjectId ?? "",
-            v.observedTeacher?.name ?? "", v.observedTeacherId ?? "",
-            v.obsPlanningPrep ?? "", v.obsCultureManagement ?? "", v.obsInstructionMusicianship ?? "",
-            v.obsEngagementEvidence ?? "", v.obsProfessionalismGrowth ?? "", v.obsNotes ?? "",
+            o?.subject?.name ?? "", o?.subjectId ?? "",
+            o?.teacher?.name ?? "", o?.teacherId ?? "",
+            o?.obsPlanningPrep ?? "", o?.obsCultureManagement ?? "", o?.obsInstructionMusicianship ?? "",
+            o?.obsEngagementEvidence ?? "", o?.obsProfessionalismGrowth ?? "", o?.notes ?? "",
             v.obsSkipReason ?? "", v.obsSkipNotes ?? "", v.principalNotes ?? "",
             v.hasInstrumentRequest, v.instrumentRequestDetails ?? "", v.reason ?? "", date(v.createdAt),
           ];
         }),
+      ],
+    },
+    {
+      // One row per class watched. A visit that observed two classes running
+      // side by side (Carol City MS, North Dade) is two rows here, each with
+      // its own teacher, ratings and notes — the shape "how is Drumline going
+      // across the region" needs, which a column per visit could never give.
+      // Visit ID joins back to the Visits tab.
+      title: "Observations",
+      rows: [
+        ["Visit ID", "Observation ID", "Date", "School", "School ID", "Region", "Visited by",
+         "Teacher", "Teacher ID", "Program", "Program ID", "Planning & prep", "Culture & management",
+         "Instruction & musicianship", "Engagement", "Professionalism", "Observation notes"],
+        ...visits.flatMap((v) =>
+          v.observations.map((o) => [
+            v.id, o.id, date(v.plannedStartDateTime), v.school.name, v.school.id,
+            v.school.region?.code ?? "", v.visitedBy?.name ?? v.visitedBy?.email ?? "",
+            o.teacher?.name ?? "", o.teacherId ?? "", o.subject?.name ?? "", o.subjectId ?? "",
+            o.obsPlanningPrep ?? "", o.obsCultureManagement ?? "", o.obsInstructionMusicianship ?? "",
+            o.obsEngagementEvidence ?? "", o.obsProfessionalismGrowth ?? "", o.notes ?? "",
+          ]),
+        ),
       ],
     },
     {
@@ -233,13 +264,14 @@ export async function buildDataset(prisma: PrismaClient): Promise<Table[]> {
       ],
     },
     {
-      // The programme catalogue, and the join target for Visits.Program ID and
-      // Classes.Subject ID.
+      // The programme catalogue, and the join target for Visits.Program ID,
+      // Observations.Program ID and Classes.Subject ID. "Visits observed"
+      // counts observations, one per class watched.
       title: "Subjects",
       rows: [
         ["Subject ID", "Name", "Description", "Classes scheduled", "Visits observed"],
         ...subjects.map((sub) => [sub.id, sub.name, sub.description ?? "",
-                                  sub._count.classSessions, sub._count.observedVisits]),
+                                  sub._count.classSessions, sub._count.observations]),
       ],
     },
     {

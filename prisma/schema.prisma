@@ -114,50 +114,50 @@ model Region {
 // ─── Schools ──────────────────────────────────────────────────────────────────
 
 model School {
-  id                   String    @id @default(cuid())
+  id                         String       @id @default(cuid())
   // schools.id in the YMU-A Supabase roster, for rows that came from there.
   // The re-sync key: without it a second import has to reconcile by name, and
   // fuzzy name matching on this roster silently merges different schools
   // ("Homestead Senior High" vs "Homestead Middle School").
-  externalId           String?   @unique
-  name                 String
-  zipCode              String    @default("")
-  address              String?
-  lat                  Float?
-  lng                  Float?
+  externalId                 String?      @unique
+  name                       String
+  zipCode                    String       @default("")
+  address                    String?
+  lat                        Float?
+  lng                        Float?
   // Where lat/lng came from: 'ymu-a' | 'ors' | 'google' | 'manual'. Rows
   // sourced from YMU-A arrive already geocoded and must not be re-geocoded.
-  geocodeSource        String?
-  availability         String    @default("[]")
+  geocodeSource              String?
+  availability               String       @default("[]")
   /// Merged duplicate / dropped from the roster (import scripts). Not the
   /// same thing as `status`: the nightly YMU-A import rewrites this one.
-  active               Boolean   @default(true)
+  active                     Boolean      @default(true)
   /// #64: ACTIVE, ON_HOLD (ours, but no classes yet — not planned, not
   /// counted, no "Never visited") or INACTIVE (we no longer work there, or it
   /// closed — hidden except in history). Set only from the app; no import
   /// touches it.
-  status               SchoolStatus @default(ACTIVE)
-  statusReason         String?
-  statusChangedAt      DateTime?
-  statusChangedById    String?
+  status                     SchoolStatus @default(ACTIVE)
+  statusReason               String?
+  statusChangedAt            DateTime?
+  statusChangedById          String?
   /// When the school last came back to ACTIVE. Cadence counts from here, so a
   /// school resumed today is not instantly "overdue" or "never visited".
-  activeSince          DateTime?
+  activeSince                DateTime?
   /// "No classes for weeks — put on hold?" dismissed until this date.
   holdSuggestionSnoozedUntil DateTime?
   /// True for the YMU office. Kept out of school lists, counts, the planner
   /// and the roster importers, but reachable for mileage like any other stop.
-  isOffice             Boolean   @default(false)
-  regionId             String?
+  isOffice                   Boolean      @default(false)
+  regionId                   String?
   // Unique: two schools pinned to the same calendar would duplicate every
   // ClassSession that calendar produces.
-  googleCalendarId     String?   @unique
+  googleCalendarId           String?      @unique
   // Google Calendar Events.list sync token for incremental sync — null means
   // the next sync does a full pull (first sync, or after a 410 Gone reset).
-  calendarSyncToken    String?
-  calendarLastSyncedAt DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  calendarSyncToken          String?
+  calendarLastSyncedAt       DateTime?
+  createdAt                  DateTime     @default(now())
+  updatedAt                  DateTime     @updatedAt
 
   region        Region?               @relation(fields: [regionId], references: [id])
   classSessions ClassSession[]
@@ -178,31 +178,35 @@ enum SchoolStatus {
 }
 
 model Teacher {
-  id             String         @id @default(cuid())
+  id             String             @id @default(cuid())
   /// The teacher's YMU-A profile id. Present for anyone imported from there,
   /// null for rows the calendar sync invented.
-  externalId     String?        @unique
+  externalId     String?            @unique
   name           String
   subjects       String?
   email          String?
   schoolId       String?
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
   classSessions  ClassSession[]
+  /// Legacy back-relation of Visit.observedTeacherId — see VisitObservation.
   observedVisits Visit[]
-  school         School?        @relation(fields: [schoolId], references: [id])
+  observations   VisitObservation[]
+  school         School?            @relation(fields: [schoolId], references: [id])
 
   @@index([schoolId])
 }
 
 model Subject {
-  id            String         @id @default(cuid())
-  name          String         @unique
-  description   String?
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
-  classSessions ClassSession[]
+  id             String             @id @default(cuid())
+  name           String             @unique
+  description    String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  classSessions  ClassSession[]
+  /// Legacy back-relation of Visit.observedSubjectId — see VisitObservation.
   observedVisits Visit[]
+  observations   VisitObservation[]
 }
 
 model ClassSession {
@@ -281,10 +285,17 @@ model Visit {
   returnCommuteMiles            Decimal?            @db.Decimal(6, 2)
   outcome                       VisitOutcome?
   outcomeNotes                  String?
+  /// LEGACY — superseded by VisitObservation (20261016000000_visit_observations)
+  /// and no longer written or read. Kept, not dropped, so nothing recorded
+  /// before a visit could hold several observations is lost; the migration
+  /// copied it into a VisitObservation with the visit's own id.
+  ///
   /// The teacher the ratings below are about. Known from the class slot the
   /// visit was booked against; null for anything logged before it was captured.
   observedTeacherId             String?
   observedTeacher               Teacher?            @relation(fields: [observedTeacherId], references: [id], onDelete: SetNull)
+  /// LEGACY — superseded by VisitObservation.subjectId; no longer written or read.
+  ///
   /// Which programme was in the room — "Beginning Band", "Modern Band". Same
   /// source as observedTeacherId: the class slot the visit was booked against.
   ///
@@ -309,15 +320,29 @@ model Visit {
   geofenceOverridden            Boolean             @default(false)
 
   // ─── Teacher observation (shown when visitedWith includes YMU_TEACHER) ──────
-  // Each domain is independently skippable ("didn't see it this visit").
+  /// One per class watched. A visit used to hold exactly one observation, and
+  /// Carol City MS and North Dade run two classes at the same time in the same
+  /// building — the RM watched both and could rate only one (Eric Levy,
+  /// 2026-10-15). Each class gets its own ratings and notes, and each teacher
+  /// sees only their own in YMU-A.
+  observations               VisitObservation[]
+  /// LEGACY — the single observation a visit used to hold. Superseded by
+  /// VisitObservation and no longer written or read; kept so nothing is lost.
   obsPlanningPrep            ObservationRating?
+  /// LEGACY — see obsPlanningPrep.
   obsCultureManagement       ObservationRating?
+  /// LEGACY — see obsPlanningPrep.
   obsInstructionMusicianship ObservationRating?
+  /// LEGACY — see obsPlanningPrep.
   obsEngagementEvidence      ObservationRating?
+  /// LEGACY — see obsPlanningPrep.
   obsProfessionalismGrowth   ObservationRating?
-  // Single shared notes field covering all 5 domains, not one per domain.
+  /// LEGACY — see obsPlanningPrep. Now VisitObservation.notes.
   obsNotes                   String?
-  // Why the rubric above is blank. Without this, an unrated visit is
+  // Why the visit has no observations. These stay on the visit: "Did you see a
+  // class?" is answered once for the whole visit, not per class.
+  //
+  // Why the rubric is blank. Without this, an unrated visit is
   // indistinguishable from an RM who simply skipped the paperwork.
   obsSkipReason              ObservationSkipReason?
   obsSkipNotes               String?
@@ -328,6 +353,44 @@ model Visit {
   @@index([vehicle])
   @@index([observedTeacherId])
   @@index([observedSubjectId])
+}
+
+/// One class an RM watched on a visit, and how it went.
+///
+/// Its own row because a visit can watch more than one class: two run at the
+/// same time in the same building at Carol City MS and North Dade, and the RM
+/// stands in both. Each gets its own five ratings and its own notes, and goes
+/// to YMU-A as that teacher's evaluation only — the other teacher never sees it.
+///
+/// The id is what YMU-A keys the evaluation by (svp_observation_id), so an edit
+/// keeps the ids of the observations it keeps rather than deleting and
+/// recreating them. The ones migrated from the single-observation columns
+/// reuse their visit's id, which is what YMU-A already had them under.
+model VisitObservation {
+  id                         String             @id @default(cuid())
+  visitId                    String
+  visit                      Visit              @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  /// Whose class it was. SetNull, not Cascade: removing a teacher must not
+  /// delete the record of a lesson somebody watched.
+  teacherId                  String?
+  teacher                    Teacher?           @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  /// Which programme. Subject rather than ClassSession for the reason given on
+  /// the legacy Visit.observedSubjectId: class sessions are disposable.
+  subjectId                  String?
+  subject                    Subject?           @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  // Each domain is independently skippable ("didn't see it this visit").
+  obsPlanningPrep            ObservationRating?
+  obsCultureManagement       ObservationRating?
+  obsInstructionMusicianship ObservationRating?
+  obsEngagementEvidence      ObservationRating?
+  obsProfessionalismGrowth   ObservationRating?
+  // One notes field covering all 5 domains, not one per domain.
+  notes                      String?
+  createdAt                  DateTime           @default(now())
+  updatedAt                  DateTime           @updatedAt
+
+  @@index([visitId])
+  @@index([teacherId])
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────────

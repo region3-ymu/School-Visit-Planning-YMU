@@ -57,6 +57,7 @@ import {
 import { getMileageReportData } from "@/lib/reports/mileageReport";
 import { resolveRange, type RangePreset } from "@/lib/reports/reportRange";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 
 /** Prisma's Decimal isn't plain-serializable across the server/client boundary. */
 function serializeVisit<T extends { milesDriven: unknown }>(visit: T) {
@@ -104,10 +105,36 @@ export async function getDashboardStats(regionFilter?: string | null) {
     select: { id: true, name: true, activeSince: true },
   });
 
+  // By class, not only by school (Emilio, 2026-10-15): which programmes those
+  // visits actually watched — one visit to Carol City that observed Drumline
+  // and Band at once counts once for the school and once for each class.
+  const observedRows = await prisma.visitObservation.findMany({
+    where: {
+      visit: {
+        status: "DONE",
+        school: schoolsOnly,
+        ...(regionWhere.regionId !== undefined
+          ? { OR: [{ visitedBy: { regionId: regionWhere.regionId } }, { visitedById: null }] }
+          : {}),
+      },
+    },
+    select: { visit: { select: { schoolId: true } }, subject: { select: { name: true } } },
+  });
+  const observedBySchool = new Map<string, Map<string, number>>();
+  for (const row of observedRows) {
+    const name = row.subject?.name ?? "Class not recorded";
+    const perSchool = observedBySchool.get(row.visit.schoolId) ?? new Map<string, number>();
+    perSchool.set(name, (perSchool.get(name) ?? 0) + 1);
+    observedBySchool.set(row.visit.schoolId, perSchool);
+  }
+
   const visitedSchoolsList = schools
     .map((school) => {
       const vc = visitCounts.find((v) => v.schoolId === school.id);
-      return { id: school.id, name: school.name, visitCount: vc ? vc._count.id : 0 };
+      const classes = [...(observedBySchool.get(school.id) ?? new Map<string, number>())]
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+      return { id: school.id, name: school.name, visitCount: vc ? vc._count.id : 0, classes };
     })
     .sort((a, b) => b.visitCount - a.visitCount);
 
@@ -177,6 +204,23 @@ export async function getDashboardStats(regionFilter?: string | null) {
       dueSchools.push({ id: school.id, name: school.name, dueKey: dayKeyInAppZone(status.dueDate) });
     }
   }
+
+  // The classes each listed school teaches (next four weeks), so a list reads
+  // "Carol City MS · Drumline, Beginning Band" rather than a bare school name.
+  const listedIds = [...overdueSchools, ...dueSchools, ...neverVisitedSchools].map((s) => s.id);
+  const upcoming = listedIds.length
+    ? await prisma.classSession.findMany({
+        where: { schoolId: { in: listedIds }, startDateTime: { gte: today, lt: addDays(today, 28) } },
+        select: { schoolId: true, subject: { select: { name: true } } },
+        distinct: ["schoolId", "subjectId"],
+      })
+    : [];
+  const classesBySchool: Record<string, string[]> = {};
+  for (const row of upcoming) {
+    if (!row.subject?.name) continue;
+    (classesBySchool[row.schoolId] ??= []).push(row.subject.name);
+  }
+  for (const list of Object.values(classesBySchool)) list.sort();
 
   // Most urgent first: the latest overdue, the soonest due.
   overdueSchools.sort((a, b) => b.daysLate - a.daysLate || a.name.localeCompare(b.name));
@@ -295,6 +339,7 @@ export async function getDashboardStats(regionFilter?: string | null) {
     overdueSchools,
     dueSchools,
     neverVisitedSchools,
+    classesBySchool,
     recentCancellations,
     cancellationWindowDays: CANCELLATION_WINDOW_DAYS,
     thisWeek,
@@ -850,6 +895,195 @@ const observationSkipReasonSchema = z.enum([
   "OTHER",
 ]);
 
+/**
+ * One class the RM watched, as the visit forms send it.
+ *
+ * A visit used to carry exactly one of these as columns on Visit. Carol City
+ * MS and North Dade run two classes at the same time in the same building, and
+ * the RM who watched both could rate only one (Eric Levy, 2026-10-15) — so the
+ * forms now send a list, one entry per class ticked, each with its own ratings
+ * and notes.
+ *
+ * `id` is only ever sent back for an observation already saved. It is what
+ * YMU-A keys the teacher's evaluation by, so an edit that keeps a class must
+ * keep its id; see replaceVisitObservations.
+ */
+const observationInputSchema = z.object({
+  id: z.string().optional(),
+  teacherId: z.string().nullable().optional(),
+  subjectId: z.string().nullable().optional(),
+  obsPlanningPrep: observationRatingSchema.nullable().optional(),
+  obsCultureManagement: observationRatingSchema.nullable().optional(),
+  obsInstructionMusicianship: observationRatingSchema.nullable().optional(),
+  obsEngagementEvidence: observationRatingSchema.nullable().optional(),
+  obsProfessionalismGrowth: observationRatingSchema.nullable().optional(),
+  notes: z.string().max(2000).optional(),
+});
+type ObservationInput = z.infer<typeof observationInputSchema>;
+
+// More classes than run side by side anywhere YMU teaches. A cap so a broken
+// client cannot write a hundred rows into one visit, not a product rule.
+const observationsSchema = z.array(observationInputSchema).max(6);
+
+/**
+ * The single-observation fields every form sent before a visit could hold
+ * several. Still accepted: a phone with a cached older bundle keeps posting
+ * these, and refusing them would fail that RM's save outright. They are turned
+ * into a one-element list (legacyObservation) and never written as columns.
+ */
+const legacyObservationFields = {
+  observedTeacherId: z.string().nullable().optional(),
+  observedSubjectId: z.string().nullable().optional(),
+  obsPlanningPrep: observationRatingSchema.nullable().optional(),
+  obsCultureManagement: observationRatingSchema.nullable().optional(),
+  obsInstructionMusicianship: observationRatingSchema.nullable().optional(),
+  obsEngagementEvidence: observationRatingSchema.nullable().optional(),
+  obsProfessionalismGrowth: observationRatingSchema.nullable().optional(),
+  obsNotes: z.string().max(2000).optional(),
+};
+type LegacyObservationFields = {
+  [K in keyof typeof legacyObservationFields]?: z.infer<(typeof legacyObservationFields)[K]>;
+};
+
+const RATING_KEYS = [
+  "obsPlanningPrep",
+  "obsCultureManagement",
+  "obsInstructionMusicianship",
+  "obsEngagementEvidence",
+  "obsProfessionalismGrowth",
+] as const;
+
+/** An older client's single observation as a list entry, or null if it sent none. */
+function legacyObservation(data: LegacyObservationFields): ObservationInput | null {
+  const o: ObservationInput = {
+    teacherId: data.observedTeacherId ?? null,
+    subjectId: data.observedSubjectId ?? null,
+    obsPlanningPrep: data.obsPlanningPrep ?? null,
+    obsCultureManagement: data.obsCultureManagement ?? null,
+    obsInstructionMusicianship: data.obsInstructionMusicianship ?? null,
+    obsEngagementEvidence: data.obsEngagementEvidence ?? null,
+    obsProfessionalismGrowth: data.obsProfessionalismGrowth ?? null,
+    notes: data.obsNotes,
+  };
+  return observationHasContent(o) ? o : null;
+}
+
+/**
+ * Whether an entry records anything at all. A ticked class with nothing
+ * against it still names whose class it was, which is worth keeping; an entry
+ * with no teacher, no programme, no rating and no note is nothing, and storing
+ * it would read later as "observed, rated nothing".
+ */
+function observationHasContent(o: ObservationInput): boolean {
+  return (
+    !!o.teacherId ||
+    !!o.subjectId ||
+    RATING_KEYS.some((k) => !!o[k]) ||
+    !!o.notes?.trim()
+  );
+}
+
+/** The columns of a VisitObservation, from what a form sent. */
+function observationRow(o: ObservationInput) {
+  return {
+    teacherId: o.teacherId || null,
+    subjectId: o.subjectId || null,
+    obsPlanningPrep: o.obsPlanningPrep ?? null,
+    obsCultureManagement: o.obsCultureManagement ?? null,
+    obsInstructionMusicianship: o.obsInstructionMusicianship ?? null,
+    obsEngagementEvidence: o.obsEngagementEvidence ?? null,
+    obsProfessionalismGrowth: o.obsProfessionalismGrowth ?? null,
+    notes: o.notes?.trim() || null,
+  };
+}
+
+/**
+ * Whether a visit can hold classroom observations at all: in person, the RM
+ * met the YMU teacher, and answered "Did you see a class?" with yes. The same
+ * three conditions the forms use to show the rubric, held here too so a stale
+ * client cannot record a lesson rubric for a phone call or a skipped class.
+ */
+function canHoldObservations(v: {
+  mode: string;
+  visitedWith: readonly string[];
+  obsSkipReason?: string | null;
+}): boolean {
+  return v.mode === "IN_PERSON" && v.visitedWith.includes("YMU_TEACHER") && v.obsSkipReason == null;
+}
+
+/**
+ * Rewrites a visit's observations to `incoming`, keeping the id of every one
+ * the client sent back.
+ *
+ * Not deleteMany + createMany, though that would be shorter. The id is what
+ * YMU-A files the teacher's evaluation under, so recreating an observation
+ * the RM merely corrected would hand the teacher a "new" evaluation and leave
+ * the relay to delete the old one — a notification for nothing, and a broken
+ * link from anything that pointed at it. An id that belongs to another visit
+ * is treated as absent rather than trusted, so an edit can never reach into
+ * somebody else's record.
+ */
+async function replaceVisitObservations(
+  tx: Prisma.TransactionClient,
+  visitId: string,
+  incoming: ObservationInput[],
+) {
+  const existing = await tx.visitObservation.findMany({ where: { visitId }, select: { id: true } });
+  const existingIds = new Set(existing.map((o) => o.id));
+  const kept = new Set<string>();
+  const updates: { id: string; o: ObservationInput }[] = [];
+  const creates: ObservationInput[] = [];
+  for (const o of incoming.filter(observationHasContent)) {
+    // The same id twice keeps the first; the second becomes a new row.
+    if (o.id && existingIds.has(o.id) && !kept.has(o.id)) {
+      kept.add(o.id);
+      updates.push({ id: o.id, o });
+    } else {
+      creates.push(o);
+    }
+  }
+  await tx.visitObservation.deleteMany({ where: { visitId, id: { notIn: [...kept] } } });
+  for (const { id, o } of updates) {
+    await tx.visitObservation.update({ where: { id }, data: observationRow(o) });
+  }
+  if (creates.length) {
+    await tx.visitObservation.createMany({ data: creates.map((o) => ({ visitId, ...observationRow(o) })) });
+  }
+}
+
+/** What the visit-reading actions select of each observation. */
+const observationInclude = {
+  teacher: { select: { name: true } },
+  subject: { select: { name: true } },
+} satisfies Prisma.VisitObservationInclude;
+
+// createdAt first; the id breaks ties between rows written in one statement.
+const observationOrder: Prisma.VisitObservationOrderByWithRelationInput[] = [
+  { createdAt: "asc" },
+  { id: "asc" },
+];
+
+type ObservationWithNames = Prisma.VisitObservationGetPayload<{ include: typeof observationInclude }>;
+
+/** One observation, shaped for the client: names alongside ids, ratings grouped. */
+function serializeObservation(o: ObservationWithNames) {
+  return {
+    id: o.id,
+    teacherId: o.teacherId,
+    teacherName: o.teacher?.name ?? null,
+    subjectId: o.subjectId,
+    subjectName: o.subject?.name ?? null,
+    ratings: {
+      obsPlanningPrep: o.obsPlanningPrep,
+      obsCultureManagement: o.obsCultureManagement,
+      obsInstructionMusicianship: o.obsInstructionMusicianship,
+      obsEngagementEvidence: o.obsEngagementEvidence,
+      obsProfessionalismGrowth: o.obsProfessionalismGrowth,
+    },
+    notes: o.notes,
+  };
+}
+
 const confirmVisitSchema = z
   .object({
     // Only used for the first visit of the day (client asks the RM where
@@ -861,12 +1095,6 @@ const confirmVisitSchema = z
     // Van and other-person's-car miles are measured but never reimbursed;
     // see the mileage report.
     vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).default("PERSONAL"),
-    // Who the ratings are about. Taken from the class slot the visit was booked
-    // against, so it needs no asking in the planner's flow.
-    observedTeacherId: z.string().optional(),
-    // Which programme was in the room, from that same slot. Optional because an
-    // older client does not send it; the server then works it out itself.
-    observedSubjectId: z.string().optional(),
     origin: originCoordsSchema.optional(),
     visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
     principalNotes: z.string().max(2000).optional(),
@@ -874,15 +1102,12 @@ const confirmVisitSchema = z
     instrumentRequestDetails: z.string().max(2000).optional(),
     geofenceDistanceM: z.number().optional(),
     geofenceOverridden: z.boolean().default(false),
-    // Teacher observation — shown when visitedWith includes YMU_TEACHER.
-    // Each domain is independently skippable.
-    obsPlanningPrep: observationRatingSchema.optional(),
-    obsCultureManagement: observationRatingSchema.optional(),
-    obsInstructionMusicianship: observationRatingSchema.optional(),
-    obsEngagementEvidence: observationRatingSchema.optional(),
-    obsProfessionalismGrowth: observationRatingSchema.optional(),
-    obsNotes: z.string().max(2000).optional(),
-    // Set instead of ratings when there was no lesson to watch.
+    // Teacher observation — shown when visitedWith includes YMU_TEACHER. One
+    // entry per class watched; the planner pre-ticks the slot's own class.
+    observations: observationsSchema.optional(),
+    // What an older bundle sends instead of `observations`.
+    ...legacyObservationFields,
+    // Set instead of observations when there was no lesson to watch.
     obsSkipReason: observationSkipReasonSchema.optional(),
     obsSkipNotes: z.string().max(2000).optional(),
   })
@@ -1091,6 +1316,35 @@ async function observedSubjectFor(schoolId: string, when: Date): Promise<string 
   return sameDay.length === 1 ? sameDay[0].subjectId : undefined;
 }
 
+/**
+ * The observations a newly confirmed or logged visit stores.
+ *
+ * None unless the visit can hold them (canHoldObservations): a phone call, a
+ * skip reason or a visit that never met the YMU teacher records no lesson, and
+ * that is enforced here rather than trusted to the form.
+ *
+ * A current client sends `observations`, one per class ticked, and its word is
+ * final — a class the RM left as "Not recorded" stays unrecorded. An older
+ * bundle sends the single-observation fields instead; those become one entry,
+ * and when they carry no programme the server works it out the way it always
+ * did for them (inferSubject), so a cached phone loses nothing it had.
+ */
+async function observationsForNewVisit(
+  data: LegacyObservationFields & {
+    mode: string;
+    visitedWith: string[];
+    obsSkipReason?: string | null;
+    observations?: ObservationInput[];
+  },
+  inferSubject: () => Promise<string | undefined>,
+): Promise<ObservationInput[]> {
+  if (!canHoldObservations(data)) return [];
+  if (data.observations) return data.observations.filter(observationHasContent);
+  const legacy = legacyObservation(data) ?? {};
+  if (!legacy.subjectId) legacy.subjectId = (await inferSubject()) ?? null;
+  return observationHasContent(legacy) ? [legacy] : [];
+}
+
 export async function confirmVisit(schoolId: string, dateIso: string, formData: unknown) {
   const session = await auth();
   const user = requireUser(session);
@@ -1156,9 +1410,7 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
   // dateIso is the class slot's start, not plannedStart — plannedStart is the
   // route position this stop takes in the RM's day and has nothing to do with
   // when the class runs.
-  const observedSubjectId = isRemote
-    ? undefined
-    : data.observedSubjectId ?? (await observedSubjectFor(schoolId, date));
+  const observations = await observationsForNewVisit(data, () => observedSubjectFor(schoolId, date));
 
   const visit = await prisma.$transaction(async (tx) => {
     // Cancel any PLANNED visit for this school+day before writing DONE
@@ -1180,9 +1432,6 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         visitedById: user.id,
         mode: data.mode,
         vehicle: data.vehicle,
-        // Never on a remote visit: there is no class in the room to rate.
-        observedTeacherId: isRemote ? undefined : data.observedTeacherId,
-        observedSubjectId,
         milesDriven: milesDriven ?? undefined,
         commuteMiles: commuteMiles ?? undefined,
         originLabel: originLabel ?? undefined,
@@ -1197,14 +1446,10 @@ export async function confirmVisit(schoolId: string, dateIso: string, formData: 
         // check or a lesson rubric for a phone call.
         geofenceDistanceM: isRemote ? undefined : data.geofenceDistanceM ?? undefined,
         geofenceOverridden: isRemote ? false : data.geofenceOverridden,
-        obsPlanningPrep: isRemote ? undefined : data.obsPlanningPrep,
-        obsCultureManagement: isRemote ? undefined : data.obsCultureManagement,
-        obsInstructionMusicianship: isRemote ? undefined : data.obsInstructionMusicianship,
-        obsEngagementEvidence: isRemote ? undefined : data.obsEngagementEvidence,
-        obsProfessionalismGrowth: isRemote ? undefined : data.obsProfessionalismGrowth,
-        obsNotes: isRemote ? undefined : data.obsNotes ?? undefined,
         obsSkipReason: isRemote ? undefined : data.obsSkipReason,
         obsSkipNotes: isRemote ? undefined : data.obsSkipNotes ?? undefined,
+        // Empty on a remote or skipped visit — observationsForNewVisit decides.
+        observations: { create: observations.map(observationRow) },
       },
     });
   });
@@ -1274,8 +1519,7 @@ export async function getVisitHistory(regionFilter?: string | null) {
     include: {
       school: { include: { region: { select: { name: true } } } },
       visitedBy: { select: { name: true, email: true } },
-      observedTeacher: { select: { name: true } },
-      observedSubject: { select: { name: true } },
+      observations: { include: observationInclude, orderBy: observationOrder },
     },
     orderBy: [{ plannedStartDateTime: "asc" }, { createdAt: "asc" }],
   });
@@ -1307,20 +1551,10 @@ export async function getVisitHistory(regionFilter?: string | null) {
     // none of it was visible anywhere.
     visitedWith: v.visitedWith,
     principalNotes: v.principalNotes,
-    observations: {
-      obsPlanningPrep: v.obsPlanningPrep,
-      obsCultureManagement: v.obsCultureManagement,
-      obsInstructionMusicianship: v.obsInstructionMusicianship,
-      obsEngagementEvidence: v.obsEngagementEvidence,
-      obsProfessionalismGrowth: v.obsProfessionalismGrowth,
-    },
-    obsNotes: v.obsNotes,
+    // One per class watched, each with its own ratings and notes.
+    observations: v.observations.map(serializeObservation),
     obsSkipReason: v.obsSkipReason,
     obsSkipNotes: v.obsSkipNotes,
-    observedTeacherId: v.observedTeacherId,
-    observedTeacherName: v.observedTeacher?.name ?? null,
-    observedSubjectId: v.observedSubjectId,
-    observedSubjectName: v.observedSubject?.name ?? null,
     hasInstrumentRequest: v.hasInstrumentRequest,
     instrumentRequestDetails: v.instrumentRequestDetails,
     geofenceOverridden: v.geofenceOverridden,
@@ -1351,20 +1585,16 @@ export async function getVisitHistory(regionFilter?: string | null) {
 const manualVisitSchema = z.object({
   mode: z.enum(["IN_PERSON", "ONLINE", "PHONE"]).default("IN_PERSON"),
   vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).default("PERSONAL"),
-  observedTeacherId: z.string().optional(),
-  observedSubjectId: z.string().optional(),
   origin: originCoordsSchema.optional(),
   notes: z.string().max(2000).optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).default([]),
   principalNotes: z.string().max(2000).optional(),
   hasInstrumentRequest: z.boolean().default(false),
   instrumentRequestDetails: z.string().max(2000).optional(),
-  obsPlanningPrep: observationRatingSchema.optional(),
-  obsCultureManagement: observationRatingSchema.optional(),
-  obsInstructionMusicianship: observationRatingSchema.optional(),
-  obsEngagementEvidence: observationRatingSchema.optional(),
-  obsProfessionalismGrowth: observationRatingSchema.optional(),
-  obsNotes: z.string().max(2000).optional(),
+  // One entry per class watched — see observationInputSchema.
+  observations: observationsSchema.optional(),
+  // What an older bundle sends instead of `observations`.
+  ...legacyObservationFields,
   obsSkipReason: observationSkipReasonSchema.optional(),
   obsSkipNotes: z.string().max(2000).optional(),
   geofenceDistanceM: z.number().optional(),
@@ -1416,13 +1646,9 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
     }
   }
 
-  const skippedObs = data.obsSkipReason != null;
-
   // plannedStart is the route slot, but it does land on the day the RM picked,
-  // which is all the day-level fallback needs.
-  const observedSubjectId = isRemote
-    ? undefined
-    : data.observedSubjectId ?? (await observedSubjectFor(schoolId, plannedStart));
+  // which is all the day-level fallback an older client needs.
+  const observations = await observationsForNewVisit(data, () => observedSubjectFor(schoolId, plannedStart));
 
   const visit = await prisma.visit.create({
     data: {
@@ -1436,8 +1662,6 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       visitedById: user.id,
       mode: data.mode,
       vehicle: data.vehicle,
-      observedTeacherId: isRemote ? undefined : data.observedTeacherId,
-      observedSubjectId,
       milesDriven: milesDriven ?? undefined,
       commuteMiles: commuteMiles ?? undefined,
       originLabel: originLabel ?? undefined,
@@ -1450,13 +1674,9 @@ export async function addManualVisit(schoolId: string, dateIso: string, formData
       geofenceDistanceM: isRemote ? undefined : data.geofenceDistanceM ?? undefined,
       geofenceOverridden: isRemote ? false : data.geofenceOverridden,
       // A remote visit has no classroom, and a skipped observation carries a
-      // reason instead of ratings — never both.
-      obsPlanningPrep: isRemote || skippedObs ? undefined : data.obsPlanningPrep,
-      obsCultureManagement: isRemote || skippedObs ? undefined : data.obsCultureManagement,
-      obsInstructionMusicianship: isRemote || skippedObs ? undefined : data.obsInstructionMusicianship,
-      obsEngagementEvidence: isRemote || skippedObs ? undefined : data.obsEngagementEvidence,
-      obsProfessionalismGrowth: isRemote || skippedObs ? undefined : data.obsProfessionalismGrowth,
-      obsNotes: isRemote || skippedObs ? undefined : data.obsNotes ?? undefined,
+      // reason instead of ratings — never both. observationsForNewVisit
+      // returns none for either.
+      observations: { create: observations.map(observationRow) },
       obsSkipReason: isRemote ? undefined : data.obsSkipReason,
       obsSkipNotes: isRemote ? undefined : data.obsSkipNotes ?? undefined,
     },
@@ -1890,21 +2110,36 @@ export async function deleteVisitLog(id: string) {
 const editVisitSchema = z.object({
   notes: z.string().max(2000).optional(),
   vehicle: z.enum(["PERSONAL", "YMU_VAN", "OTHER_PERSON_CAR"]).optional(),
-  observedTeacherId: z.string().nullable().optional(),
-  observedSubjectId: z.string().nullable().optional(),
   visitedWith: z.array(z.enum(["PRINCIPAL", "MAIN_OFFICE", "INSCHOOL_MUSIC_TEACHER", "YMU_TEACHER"])).optional(),
   principalNotes: z.string().max(2000).optional(),
   hasInstrumentRequest: z.boolean().optional(),
   instrumentRequestDetails: z.string().max(2000).optional(),
-  obsPlanningPrep: observationRatingSchema.nullable().optional(),
-  obsCultureManagement: observationRatingSchema.nullable().optional(),
-  obsInstructionMusicianship: observationRatingSchema.nullable().optional(),
-  obsEngagementEvidence: observationRatingSchema.nullable().optional(),
-  obsProfessionalismGrowth: observationRatingSchema.nullable().optional(),
-  obsNotes: z.string().max(2000).optional(),
+  // The visit's full list of observations after the edit, saved ones carrying
+  // their id. Omitted means "leave them as they are".
+  observations: observationsSchema.optional(),
+  // What an older bundle sends instead; see editVisitLog for how it lands.
+  ...legacyObservationFields,
   obsSkipReason: observationSkipReasonSchema.nullable().optional(),
   obsSkipNotes: z.string().max(2000).optional(),
 });
+
+/**
+ * The fields an older bundle's edit actually sent, as VisitObservation
+ * columns. Undefined stays undefined — "not sent", so not changed — which is
+ * how that form always behaved. Null if it sent none of them.
+ */
+function legacyEditPatch(data: LegacyObservationFields) {
+  const patch: {
+    teacherId?: string | null;
+    subjectId?: string | null;
+    notes?: string | null;
+  } & { [K in (typeof RATING_KEYS)[number]]?: ObservationInput[K] } = {};
+  if (data.observedTeacherId !== undefined) patch.teacherId = data.observedTeacherId || null;
+  if (data.observedSubjectId !== undefined) patch.subjectId = data.observedSubjectId || null;
+  for (const k of RATING_KEYS) if (data[k] !== undefined) patch[k] = data[k];
+  if (data.obsNotes !== undefined) patch.notes = data.obsNotes.trim() || null;
+  return Object.keys(patch).length ? patch : null;
+}
 
 export async function editVisitLog(id: string, newDateIso: string, formData: unknown) {
   const session = await auth();
@@ -1918,7 +2153,17 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
   if (!parsed.success) throw new Error(parsed.error.message);
   const data = parsed.data;
 
-  const existing = await prisma.visit.findUnique({ where: { id }, select: { visitedById: true, plannedStartDateTime: true } });
+  const existing = await prisma.visit.findUnique({
+    where: { id },
+    select: {
+      visitedById: true,
+      plannedStartDateTime: true,
+      mode: true,
+      visitedWith: true,
+      obsSkipReason: true,
+      observations: { select: { id: true }, orderBy: observationOrder, take: 1 },
+    },
+  });
   if (!existing) throw new Error("Visit not found");
   if (existing.visitedById && existing.visitedById !== user.id && !canEditOthersVisits(user)) {
     throw new Error("That visit belongs to someone else");
@@ -1938,51 +2183,66 @@ export async function editVisitLog(id: string, newDateIso: string, formData: unk
 
   const skipped = data.obsSkipReason != null;
 
-  const visit = await prisma.visit.update({
-    where: { id },
-    data: {
-      plannedStartDateTime: plannedStart,
-      ...(plannedEnd ? { plannedEndDateTime: plannedEnd } : {}),
-      ...(data.notes !== undefined ? { reason: data.notes || "Manual logging" } : {}),
-      ...(data.vehicle !== undefined ? { vehicle: data.vehicle } : {}),
-      ...(data.observedTeacherId !== undefined ? { observedTeacherId: data.observedTeacherId } : {}),
-      ...(data.observedSubjectId !== undefined ? { observedSubjectId: data.observedSubjectId } : {}),
-      ...(data.visitedWith !== undefined ? { visitedWith: data.visitedWith } : {}),
-      ...(data.principalNotes !== undefined ? { principalNotes: data.principalNotes || null } : {}),
-      ...(data.hasInstrumentRequest !== undefined
-        ? {
-            hasInstrumentRequest: data.hasInstrumentRequest,
-            instrumentRequestDetails: data.hasInstrumentRequest
-              ? data.instrumentRequestDetails || null
-              : null,
-          }
-        : {}),
-      // Ratings and a skip reason are mutually exclusive, so setting one clears
-      // the other — otherwise correcting a mislabelled visit would leave stale
-      // ratings sitting behind the reason.
-      ...(data.obsSkipReason !== undefined
-        ? {
-            obsSkipReason: data.obsSkipReason,
-            obsSkipNotes: skipped ? data.obsSkipNotes || null : null,
-            ...(skipped
-              ? {
-                  obsPlanningPrep: null,
-                  obsCultureManagement: null,
-                  obsInstructionMusicianship: null,
-                  obsEngagementEvidence: null,
-                  obsProfessionalismGrowth: null,
-                  obsNotes: null,
-                }
-              : {}),
-          }
-        : {}),
-      ...(!skipped && data.obsPlanningPrep !== undefined ? { obsPlanningPrep: data.obsPlanningPrep } : {}),
-      ...(!skipped && data.obsCultureManagement !== undefined ? { obsCultureManagement: data.obsCultureManagement } : {}),
-      ...(!skipped && data.obsInstructionMusicianship !== undefined ? { obsInstructionMusicianship: data.obsInstructionMusicianship } : {}),
-      ...(!skipped && data.obsEngagementEvidence !== undefined ? { obsEngagementEvidence: data.obsEngagementEvidence } : {}),
-      ...(!skipped && data.obsProfessionalismGrowth !== undefined ? { obsProfessionalismGrowth: data.obsProfessionalismGrowth } : {}),
-      ...(!skipped && data.obsNotes !== undefined ? { obsNotes: data.obsNotes || null } : {}),
-    },
+  // Whether the visit could hold observations before this edit and after it.
+  // Mode is not editable here, so only who was seen and the skip reason move.
+  const wasObserving = canHoldObservations(existing);
+  const nowObserving = canHoldObservations({
+    mode: existing.mode,
+    visitedWith: data.visitedWith ?? existing.visitedWith,
+    obsSkipReason: data.obsSkipReason !== undefined ? data.obsSkipReason : existing.obsSkipReason,
+  });
+
+  // An older bundle's single observation. It only ever knew one, so it is
+  // read as a change to the FIRST observation and leaves any others alone —
+  // replacing the whole list with it would silently delete the second class
+  // somebody rated from a newer phone.
+  const legacyPatch = data.observations === undefined ? legacyEditPatch(data) : null;
+
+  const visit = await prisma.$transaction(async (tx) => {
+    const updated = await tx.visit.update({
+      where: { id },
+      data: {
+        plannedStartDateTime: plannedStart,
+        ...(plannedEnd ? { plannedEndDateTime: plannedEnd } : {}),
+        ...(data.notes !== undefined ? { reason: data.notes || "Manual logging" } : {}),
+        ...(data.vehicle !== undefined ? { vehicle: data.vehicle } : {}),
+        ...(data.visitedWith !== undefined ? { visitedWith: data.visitedWith } : {}),
+        ...(data.principalNotes !== undefined ? { principalNotes: data.principalNotes || null } : {}),
+        ...(data.hasInstrumentRequest !== undefined
+          ? {
+              hasInstrumentRequest: data.hasInstrumentRequest,
+              instrumentRequestDetails: data.hasInstrumentRequest
+                ? data.instrumentRequestDetails || null
+                : null,
+            }
+          : {}),
+        ...(data.obsSkipReason !== undefined
+          ? { obsSkipReason: data.obsSkipReason, obsSkipNotes: skipped ? data.obsSkipNotes || null : null }
+          : {}),
+      },
+    });
+
+    if (!nowObserving) {
+      // Observations and a skip reason are mutually exclusive, so setting one
+      // clears the other — otherwise correcting a mislabelled visit would
+      // leave stale ratings sitting behind the reason. Same for unticking the
+      // YMU teacher or anything else that stops this being an observation.
+      //
+      // Only when the edit is what changed that. A visit that never was an
+      // observation can still carry the programme migrated from the old
+      // columns, and fixing its mileage must not erase it.
+      if (wasObserving) await tx.visitObservation.deleteMany({ where: { visitId: id } });
+    } else if (data.observations !== undefined) {
+      await replaceVisitObservations(tx, id, data.observations);
+    } else if (legacyPatch) {
+      const first = existing.observations[0];
+      if (first) {
+        await tx.visitObservation.update({ where: { id: first.id }, data: legacyPatch });
+      } else if (observationHasContent(legacyPatch as ObservationInput)) {
+        await tx.visitObservation.create({ data: { visitId: id, ...legacyPatch } });
+      }
+    }
+    return updated;
   });
   // #56: keep the teacher's Evaluations in YMU-A in step with this visit.
   after(() => syncEvaluationToYmua(prisma, visit.id).then(() => undefined));
@@ -2200,7 +2460,10 @@ export async function getSchoolProfile(schoolId: string) {
     getSchoolTeachers(schoolId),
     prisma.visit.findMany({
       where: { schoolId, status: "DONE" },
-      include: { visitedBy: { select: { name: true, email: true } } },
+      include: {
+        visitedBy: { select: { name: true, email: true } },
+        observations: { include: observationInclude, orderBy: observationOrder },
+      },
       orderBy: { plannedStartDateTime: "desc" },
       take: 25,
     }),
@@ -2242,14 +2505,7 @@ export async function getSchoolProfile(schoolId: string) {
       originLabel: v.originLabel,
       visitedWith: v.visitedWith,
       principalNotes: v.principalNotes,
-      observations: {
-        obsPlanningPrep: v.obsPlanningPrep,
-        obsCultureManagement: v.obsCultureManagement,
-        obsInstructionMusicianship: v.obsInstructionMusicianship,
-        obsEngagementEvidence: v.obsEngagementEvidence,
-        obsProfessionalismGrowth: v.obsProfessionalismGrowth,
-      },
-      obsNotes: v.obsNotes,
+      observations: v.observations.map(serializeObservation),
       obsSkipReason: v.obsSkipReason,
       obsSkipNotes: v.obsSkipNotes,
       hasInstrumentRequest: v.hasInstrumentRequest,
@@ -2311,33 +2567,52 @@ export async function getTeacherProfile(teacherId: string) {
   );
   const schoolIds = [...new Set(sessions.map((s) => s.school.id))];
 
-  // A visit now names the teacher it observed, so that is used where it exists.
-  // Older visits recorded only the school; those are still shown, marked as
-  // unattributed, because dropping them would lose the history they hold — but
-  // they are the reason a school with two teachers shows the same visit twice.
-  const visits = schoolIds.length
-    ? await prisma.visit.findMany({
-        where: {
-          status: "DONE",
-          OR: [
-            { observedTeacherId: teacherId },
-            {
-              observedTeacherId: null,
-              schoolId: { in: schoolIds },
-              visitedWith: { has: "YMU_TEACHER" },
-            },
-          ],
-        },
+  // Every observation that names this teacher — one per class watched, so a
+  // visit that also rated the teacher next door contributes only this
+  // teacher's ratings and notes, never the other's.
+  const mine = await prisma.visitObservation.findMany({
+    where: { teacherId, visit: { status: "DONE" } },
+    include: {
+      ...observationInclude,
+      visit: {
         include: {
           school: { select: { id: true, name: true } },
           visitedBy: { select: { name: true, email: true } },
         },
-        orderBy: { plannedStartDateTime: "desc" },
+      },
+    },
+  });
+
+  // Older visits recorded only the school; those are still shown, marked as
+  // unattributed, because dropping them would lose the history they hold — but
+  // they are the reason a school with two teachers shows the same visit twice.
+  // "Unattributed" now means no observation on the visit names anyone: once
+  // one does, the visit belongs to that teacher and not to everybody here.
+  const unattributed = schoolIds.length
+    ? await prisma.visit.findMany({
+        where: {
+          status: "DONE",
+          schoolId: { in: schoolIds },
+          visitedWith: { has: "YMU_TEACHER" },
+          observations: { none: { teacherId: { not: null } } },
+        },
+        include: {
+          school: { select: { id: true, name: true } },
+          visitedBy: { select: { name: true, email: true } },
+          observations: { include: observationInclude, orderBy: observationOrder },
+        },
       })
     : [];
 
-  const observations = visits.map((v) => ({
-    id: v.id,
+  type ProfileVisit = (typeof unattributed)[number] | (typeof mine)[number]["visit"];
+  const row = (
+    v: ProfileVisit,
+    o: ReturnType<typeof serializeObservation> | null,
+    attributed: boolean,
+  ) => ({
+    // An observation's own id, or the visit's when it has none to show.
+    id: o?.id ?? v.id,
+    visitId: v.id,
     date: v.plannedStartDateTime,
     schoolId: v.school.id,
     schoolName: v.school.name,
@@ -2345,19 +2620,29 @@ export async function getTeacherProfile(teacherId: string) {
     isMine: v.visitedById === user.id,
     mode: v.mode,
     // False for older visits that recorded only the school.
-    attributed: v.observedTeacherId === teacherId,
-    ratings: {
-      obsPlanningPrep: v.obsPlanningPrep,
-      obsCultureManagement: v.obsCultureManagement,
-      obsInstructionMusicianship: v.obsInstructionMusicianship,
-      obsEngagementEvidence: v.obsEngagementEvidence,
-      obsProfessionalismGrowth: v.obsProfessionalismGrowth,
+    attributed,
+    subjectName: o?.subjectName ?? null,
+    ratings: o?.ratings ?? {
+      obsPlanningPrep: null,
+      obsCultureManagement: null,
+      obsInstructionMusicianship: null,
+      obsEngagementEvidence: null,
+      obsProfessionalismGrowth: null,
     },
-    obsNotes: v.obsNotes,
+    notes: o?.notes ?? null,
     obsSkipReason: v.obsSkipReason,
     obsSkipNotes: v.obsSkipNotes,
     principalNotes: v.principalNotes,
-  }));
+  });
+
+  const observations = [
+    ...mine.map((o) => row(o.visit, serializeObservation(o), true)),
+    ...unattributed.flatMap((v) =>
+      v.observations.length
+        ? v.observations.map((o) => row(v, serializeObservation(o), false))
+        : [row(v, null, false)],
+    ),
+  ].sort((a, b) => b.date.getTime() - a.date.getTime());
 
   return {
     teacher: {
@@ -2511,6 +2796,108 @@ export async function getSchoolSubjects(schoolId: string, onDateIso?: string) {
       b.classCount - a.classCount ||
       a.name.localeCompare(b.name)
   );
+}
+
+/**
+ * What the "Which classes did you observe?" checklist offers, for one school
+ * on one day.
+ *
+ * A class here is a programme and its teacher — "Drumline — Yailin Ayala" —
+ * because that pair is what an observation is about. Carol City MS and North
+ * Dade run two at the same time in the same building, which is the whole
+ * reason the form became a checklist (Eric Levy, 2026-10-15): both appear, and
+ * the RM ticks each one they stood in.
+ *
+ * The day's own classes when the calendar has any. When it has none — a visit
+ * logged for a day the sync never saw, a cancelled timetable — the pairs this
+ * school ran this year instead, marked as not on the calendar that day, so the
+ * list is never empty for a school YMU actually teaches at.
+ *
+ * Teacherless sessions are left out of the checklist: an evaluation goes to a
+ * teacher, and a class with nobody on it would be a box that shares with no
+ * one. The teacher and programme lists returned alongside are what the form's
+ * "Other / not listed" path picks from, so nothing the old separate pickers
+ * allowed has become impossible.
+ */
+export async function getObservationChoices(schoolId: string, onDateIso: string) {
+  requireUser(await auth());
+  const dayKey = toAppZoneDayKey(onDateIso);
+  const dayStart = zonedDayStart(dayKey);
+  const dayEnd = zonedDayStart(addDaysToDayKey(dayKey, 1));
+
+  const sessionSelect = {
+    startDateTime: true,
+    endDateTime: true,
+    subjectId: true,
+    teacherId: true,
+    subject: { select: { name: true } },
+    teacher: { select: { name: true } },
+  } as const;
+
+  let ranOnDate = true;
+  let sessions = await prisma.classSession.findMany({
+    where: { schoolId, teacherId: { not: null }, startDateTime: { gte: dayStart, lt: dayEnd } },
+    select: sessionSelect,
+    orderBy: { startDateTime: "asc" },
+  });
+  if (sessions.length === 0) {
+    ranOnDate = false;
+    const firstQuarter = await prisma.quarter.findFirst({ orderBy: { startDate: "asc" } });
+    sessions = await prisma.classSession.findMany({
+      where: {
+        schoolId,
+        teacherId: { not: null },
+        ...(firstQuarter ? { startDateTime: { gte: firstQuarter.startDate } } : {}),
+      },
+      select: sessionSelect,
+      orderBy: { startDateTime: "asc" },
+    });
+  }
+
+  const byPair = new Map<
+    string,
+    { subjectId: string; subjectName: string; teacherId: string; teacherName: string; times: string[]; ranOnDate: boolean }
+  >();
+  for (const c of sessions) {
+    if (!c.teacherId || !c.teacher) continue;
+    const key = `${c.subjectId}|${c.teacherId}`;
+    const row = byPair.get(key) ?? {
+      subjectId: c.subjectId,
+      subjectName: c.subject.name,
+      teacherId: c.teacherId,
+      teacherName: c.teacher.name,
+      times: [] as string[],
+      ranOnDate,
+    };
+    // The time is what tells two same-named sections apart at a glance; a
+    // year's worth of them would just be noise.
+    if (ranOnDate) {
+      const t = `${formatTimeInAppZone(c.startDateTime)}–${formatTimeInAppZone(c.endDateTime)}`;
+      if (!row.times.includes(t)) row.times.push(t);
+    }
+    byPair.set(key, row);
+  }
+
+  const [teachers, subjects] = await Promise.all([
+    getSchoolTeachers(schoolId, onDateIso),
+    getSchoolSubjects(schoolId, onDateIso),
+  ]);
+
+  return {
+    classes: [...byPair.values()].sort(
+      (a, b) =>
+        (a.times[0] ?? "").localeCompare(b.times[0] ?? "") ||
+        a.subjectName.localeCompare(b.subjectName) ||
+        a.teacherName.localeCompare(b.teacherName),
+    ),
+    teachers: teachers.map((t) => ({
+      id: t.id,
+      name: t.name,
+      subjectsHere: t.subjectsHere,
+      teachingOnDate: t.teachingOnDate,
+    })),
+    subjects: subjects.map((sub) => ({ id: sub.id, name: sub.name, taughtOnDate: sub.taughtOnDate })),
+  };
 }
 
 export async function createTeacher(schoolId: string, data: { name: string; subjects?: string }) {

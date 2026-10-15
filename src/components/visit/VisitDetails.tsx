@@ -7,6 +7,7 @@ import {
   SKIP_REASONS,
   type ObservationRating,
   type ObservationSkipReason,
+  type SavedObservation,
 } from "./TeacherObservationFields";
 
 const VISITED_WITH_LABELS: Record<string, string> = {
@@ -55,15 +56,14 @@ export type VisitDetailsData = {
   originLabel: string | null;
   visitedWith: string[];
   principalNotes: string | null;
-  observations: Record<string, ObservationRating | null>;
-  obsNotes: string | null;
+  /** One per class watched, each with its own ratings and notes. */
+  observations: SavedObservation[];
   obsSkipReason: ObservationSkipReason | null;
   obsSkipNotes: string | null;
   hasInstrumentRequest: boolean;
   instrumentRequestDetails: string | null;
   geofenceOverridden: boolean;
   visitedByName: string | null;
-  observedTeacherName?: string | null;
 };
 
 /**
@@ -73,7 +73,6 @@ export type VisitDetailsData = {
  * with a principal or a teacher's ratings went in and were never seen again.
  */
 export default function VisitDetails({ visit }: { visit: VisitDetailsData }) {
-  const rated = OBSERVATION_DOMAINS.filter((d) => visit.observations[d.key]);
   const driven = (visit.milesDriven ?? 0) + (visit.returnMilesDriven ?? 0);
   const commute = (visit.commuteMiles ?? 0) + (visit.returnCommuteMiles ?? 0);
   const isVan = visit.vehicle === "YMU_VAN";
@@ -149,45 +148,61 @@ export default function VisitDetails({ visit }: { visit: VisitDetailsData }) {
         </Section>
       )}
 
-      {(rated.length > 0 || visit.obsSkipReason) && (
+      {visit.obsSkipReason && (
         <div className="md:col-span-2">
-          <Section title={visit.observedTeacherName ? `Teacher observation — ${visit.observedTeacherName}` : "Teacher observation"}>
-            {visit.obsSkipReason ? (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
-                Not evaluated — {skipLabel(visit.obsSkipReason).toLowerCase()}
-                {visit.obsSkipNotes && (
-                  <span className="text-gray-600 dark:text-gray-400"> · {visit.obsSkipNotes}</span>
+          <Section title="Teacher observation">
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              Not evaluated — {skipLabel(visit.obsSkipReason).toLowerCase()}
+              {visit.obsSkipNotes && (
+                <span className="text-gray-600 dark:text-gray-400"> · {visit.obsSkipNotes}</span>
+              )}
+            </p>
+          </Section>
+        </div>
+      )}
+
+      {/* One section per class watched — two classes running side by side are
+          two observations, each about its own teacher. Not shown behind a
+          skip reason: rows migrated from before can sit on such a visit, and
+          "not evaluated" next to ratings would contradict itself. */}
+      {!visit.obsSkipReason &&
+        visit.observations.map((o) => {
+          const rated = OBSERVATION_DOMAINS.filter((d) => o.ratings[d.key]);
+          if (rated.length === 0 && !o.notes && !o.teacherName) return null;
+          const who = [o.subjectName, o.teacherName].filter(Boolean).join(" · ");
+          return (
+            <div key={o.id} className="md:col-span-2">
+              <Section title={who ? `Teacher observation — ${who}` : "Teacher observation"}>
+                {rated.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+                    {rated.map((d) => {
+                      const r = o.ratings[d.key] as ObservationRating;
+                      return (
+                        <div key={d.key} className="flex items-center justify-between gap-3 text-sm">
+                          <span className="text-gray-700 dark:text-gray-300">{d.title}</span>
+                          <span className={`px-2 py-0.5 rounded text-xs font-semibold shrink-0 ${RATING_TONE[r]}`}>
+                            {ratingLabel(r)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400">No ratings recorded.</p>
                 )}
-              </p>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-                  {rated.map((d) => {
-                    const r = visit.observations[d.key] as ObservationRating;
-                    return (
-                      <div key={d.key} className="flex items-center justify-between gap-3 text-sm">
-                        <span className="text-gray-700 dark:text-gray-300">{d.title}</span>
-                        <span className={`px-2 py-0.5 rounded text-xs font-semibold shrink-0 ${RATING_TONE[r]}`}>
-                          {ratingLabel(r)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-                {rated.length < OBSERVATION_DOMAINS.length && (
+                {rated.length > 0 && rated.length < OBSERVATION_DOMAINS.length && (
                   <p className="text-xs text-gray-400 mt-1.5">
                     {OBSERVATION_DOMAINS.length - rated.length} domain
                     {OBSERVATION_DOMAINS.length - rated.length === 1 ? "" : "s"} not rated this visit.
                   </p>
                 )}
-                {visit.obsNotes && (
-                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">{visit.obsNotes}</p>
+                {o.notes && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">{o.notes}</p>
                 )}
-              </>
-            )}
-          </Section>
-        </div>
-      )}
+              </Section>
+            </div>
+          );
+        })}
 
       {visit.mode !== "IN_PERSON" && (
         <p className="md:col-span-2 text-xs text-gray-400 inline-flex items-center gap-1.5">

@@ -3,17 +3,27 @@
 import { useEffect, useState } from "react";
 import { X, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { isToday } from "date-fns";
-import { confirmVisit, getPreviousVisitToday, getMyHomeLocation, setMyHomeLocation, getOfficeLocations } from "@/app/actions";
+import {
+  confirmVisit,
+  getPreviousVisitToday,
+  getMyHomeLocation,
+  setMyHomeLocation,
+  getOfficeLocations,
+  getObservationChoices,
+} from "@/app/actions";
 import { useGeofence } from "./visit/useGeofence";
 import GeofenceNotice from "./visit/GeofenceNotice";
 import OriginPicker, { type OriginMode } from "./visit/OriginPicker";
 import VehiclePicker, { type VehicleType } from "./visit/VehiclePicker";
 import TeacherObservationFields, {
-  EMPTY_OBSERVATIONS,
-  type ObservationDomainKey,
-  type ObservationRating,
+  EMPTY_CHOICES,
+  entriesToPayload,
+  entryLabel,
+  newObservationEntry,
+  observationProblem,
+  type ObservationChoices,
+  type ObservationEntry,
   type ObservationSkipReason,
-  type ObservationState,
 } from "./visit/TeacherObservationFields";
 
 type ChainState =
@@ -100,8 +110,24 @@ export default function ConfirmVisitModal({
   const [principalNotes, setPrincipalNotes] = useState("");
   const [hasInstrumentRequest, setHasInstrumentRequest] = useState(false);
   const [instrumentRequestDetails, setInstrumentRequestDetails] = useState("");
-  const [observations, setObservations] = useState<ObservationState>(EMPTY_OBSERVATIONS);
-  const [obsNotes, setObsNotes] = useState("");
+  // One block per class watched. The slot this visit was booked against is
+  // ticked from the start — it is the class the RM came for — and any other
+  // running alongside it is one tap away.
+  const [observationEntries, setObservationEntries] = useState<ObservationEntry[]>(() =>
+    teacherId || subjectId
+      ? [
+          {
+            ...newObservationEntry(subjectId ?? null, teacherId ?? null),
+            // Named from the slot, so the block reads right even before the
+            // lists load, or if the calendar no longer offers this pair.
+            savedTeacherName: teacherName ?? null,
+            savedSubjectName: subjectName ?? null,
+          },
+        ]
+      : []
+  );
+  const [choices, setChoices] = useState<ObservationChoices>(EMPTY_CHOICES);
+  const [choicesLoading, setChoicesLoading] = useState(true);
   const [obsSkipReason, setObsSkipReason] = useState<ObservationSkipReason | null>(null);
   const [obsSkipNotes, setObsSkipNotes] = useState("");
 
@@ -119,6 +145,10 @@ export default function ConfirmVisitModal({
       }
     });
     getOfficeLocations().then((list) => setOffice(list[0] ?? null));
+    getObservationChoices(schoolId, visitDate.toISOString())
+      .then(setChoices)
+      .catch(() => setChoices(EMPTY_CHOICES))
+      .finally(() => setChoicesLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -158,11 +188,21 @@ export default function ConfirmVisitModal({
   // Only then. Picking a skip reason already says the rubric was not filled in
   // and why — asking for evidence of an observation that did not happen would
   // just teach people to type a full stop.
+  //
+  // Per class now: each ticked class goes to its own teacher, so each needs
+  // its own line of evidence.
   const needsObsNotes = showTeacherObservation && !skippedObs;
-  const obsNotesMissing = needsObsNotes && obsNotes.trim().length < MIN_OBSERVATION_NOTES;
+  const missingNotesFor = needsObsNotes
+    ? observationEntries.filter((e) => e.notes.trim().length < MIN_OBSERVATION_NOTES)
+    : [];
+  // Which classes, and whose — checked once the lists have arrived, so the
+  // button does not flash disabled while they load.
+  const obsProblem =
+    needsObsNotes && !choicesLoading ? observationProblem(observationEntries, choices) : null;
 
   const canConfirm =
-    !obsNotesMissing &&
+    missingNotesFor.length === 0 &&
+    !obsProblem &&
     (isRemote ||
       (isBackdated
         ? hasStartingPoint
@@ -170,10 +210,6 @@ export default function ConfirmVisitModal({
 
   const toggleVisitedWith = (value: string) => {
     setVisitedWith((prev) => (prev.includes(value) ? prev.filter((v) => v !== value) : [...prev, value]));
-  };
-
-  const setObservation = (key: ObservationDomainKey, value: ObservationRating) => {
-    setObservations((prev) => ({ ...prev, [key]: prev[key] === value ? null : value }));
   };
 
   const handleSubmit = async () => {
@@ -219,12 +255,6 @@ export default function ConfirmVisitModal({
       await confirmVisit(schoolId, visitDate.toISOString(), {
         mode,
         vehicle,
-        // Only meaningful alongside a rubric; a phone call observes nobody.
-        observedTeacherId: showTeacherObservation ? teacherId : undefined,
-        // Sent unconditionally, unlike the teacher: which programme was running
-        // is a fact about the visit, true whether or not anybody was rated.
-        // The server fills it in from the slot when an older client omits it.
-        observedSubjectId: subjectId,
         origin,
         visitedWith,
         principalNotes: showTalkAbout ? principalNotes.trim() || undefined : undefined,
@@ -232,13 +262,11 @@ export default function ConfirmVisitModal({
         instrumentRequestDetails: hasInstrumentRequest ? instrumentRequestDetails.trim() : undefined,
         geofenceDistanceM: isRemote || isBackdated ? undefined : geofenceDistanceM ?? undefined,
         geofenceOverridden: isRemote ? false : isBackdated || geofenceStatus !== "ok",
-        // A skipped observation carries a reason instead of ratings, never both.
-        obsPlanningPrep: skippedObs ? undefined : observations.obsPlanningPrep ?? undefined,
-        obsCultureManagement: skippedObs ? undefined : observations.obsCultureManagement ?? undefined,
-        obsInstructionMusicianship: skippedObs ? undefined : observations.obsInstructionMusicianship ?? undefined,
-        obsEngagementEvidence: skippedObs ? undefined : observations.obsEngagementEvidence ?? undefined,
-        obsProfessionalismGrowth: skippedObs ? undefined : observations.obsProfessionalismGrowth ?? undefined,
-        obsNotes: showTeacherObservation && !skippedObs ? obsNotes.trim() || undefined : undefined,
+        // One per class watched. Always sent, even empty: it is what tells the
+        // server this is a current client, whose "no class" is final, rather
+        // than an older one whose missing programme it should work out. A
+        // skipped observation carries a reason instead, never both.
+        observations: showTeacherObservation && !skippedObs ? entriesToPayload(observationEntries) : [],
         obsSkipReason: skippedObs ? obsSkipReason ?? undefined : undefined,
         obsSkipNotes: skippedObs ? obsSkipNotes.trim() || undefined : undefined,
       });
@@ -394,18 +422,12 @@ export default function ConfirmVisitModal({
           )}
 
           {/* Teacher observation — YMU teacher */}
-          {showTeacherObservation && teacherName && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 -mb-2">
-              Ratings below are recorded for <span className="font-medium">{teacherName}</span>
-              {subjectName ? ` (${subjectName})` : ""}.
-            </p>
-          )}
           {showTeacherObservation && (
             <TeacherObservationFields
-              observations={observations}
-              onObservationChange={setObservation}
-              notes={obsNotes}
-              onNotesChange={setObsNotes}
+              entries={observationEntries}
+              onEntriesChange={setObservationEntries}
+              choices={choices}
+              loadingChoices={choicesLoading}
               skipReason={obsSkipReason}
               onSkipReasonChange={setObsSkipReason}
               skipNotes={obsSkipNotes}
@@ -441,11 +463,15 @@ export default function ConfirmVisitModal({
           {/* Said here rather than left to a greyed-out button. A disabled
               Confirm with no explanation reads as the app being broken, and
               the RM has already filled in a whole rubric by this point. */}
-          {obsNotesMissing && (
+          {obsProblem && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">{obsProblem}</p>
+          )}
+          {missingNotesFor.length > 0 && (
             <p className="text-sm text-amber-600 dark:text-amber-400">
-              You rated {teacherName ?? "the teacher"} — add a line about what you
-              saw or heard before confirming. If you did not actually observe the
-              class, pick a reason above instead.
+              Add a line about what you saw or heard for{" "}
+              {missingNotesFor.map((e) => entryLabel(e, choices)).join(" and ")} before
+              confirming. If you did not actually observe the class, pick a reason
+              above instead.
             </p>
           )}
 

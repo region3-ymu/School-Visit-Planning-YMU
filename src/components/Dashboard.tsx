@@ -173,7 +173,8 @@ export default function Dashboard({
         recentCancellations: 0,
         cancellationWindowDays: 30,
         thisWeek: { inPerson: 0, online: 0, phone: 0, total: 0 },
-        visitedSchoolsList: [] as { id: string, name: string, visitCount: number }[],
+        visitedSchoolsList: [] as { id: string, name: string, visitCount: number, classes: { name: string; count: number }[] }[],
+        classesBySchool: {} as Record<string, string[]>,
         onHoldSchools: [] as { id: string; name: string; reason: string | null; sinceKey: string | null; hasClassesAgain: boolean; canChange: boolean }[],
         holdSuggestions: [] as { id: string; name: string; canChange: boolean }[],
         holdSuggestionWeeks: { back: 3, ahead: 4 },
@@ -291,7 +292,12 @@ export default function Dashboard({
                         <ul className="mt-3 divide-y divide-gray-100 dark:divide-zinc-800">
                             {listRows.map((row) => (
                                 <li key={row.id} className="py-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-                                    <span className="text-sm font-medium text-gray-800 dark:text-gray-100 min-w-0">{row.name}</span>
+                                    <span className="text-sm font-medium text-gray-800 dark:text-gray-100 min-w-0">
+                                        {row.name}
+                                        {(stats.classesBySchool[row.id] ?? []).length > 0 && (
+                                            <span className="font-normal text-gray-500 dark:text-gray-400"> · {stats.classesBySchool[row.id].join(", ")}</span>
+                                        )}
+                                    </span>
                                     {row.detail && (
                                         <span className="text-xs text-gray-500 dark:text-gray-400">{row.detail}</span>
                                     )}
@@ -371,11 +377,17 @@ export default function Dashboard({
                     ) : (
                         <ul className="divide-y divide-gray-100 dark:divide-zinc-800">
                             {stats.visitedSchoolsList.map((school) => (
-                                <li key={school.id} className="p-4 flex justify-between items-center hover:bg-gray-50 dark:hover:bg-zinc-800/30 transition-colors">
-                                    <span className="font-medium text-gray-800 dark:text-gray-200">
-                                        {school.name}
+                                <li key={school.id} className="p-4 flex justify-between items-center gap-3 hover:bg-gray-50 dark:hover:bg-zinc-800/30 transition-colors">
+                                    <span className="min-w-0">
+                                        <span className="block font-medium text-gray-800 dark:text-gray-200">{school.name}</span>
+                                        {/* By class: what those visits actually observed. */}
+                                        {school.classes.length > 0 && (
+                                            <span className="block text-xs text-gray-500 dark:text-gray-400">
+                                                {school.classes.map((c) => `${c.name} ×${c.count}`).join(" · ")}
+                                            </span>
+                                        )}
                                     </span>
-                                    <span className="text-sm px-3 py-1 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold rounded-full">
+                                    <span className="shrink-0 text-sm px-3 py-1 bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-bold rounded-full">
                                         {school.visitCount} visit{school.visitCount !== 1 ? "s" : ""}
                                     </span>
                                 </li>

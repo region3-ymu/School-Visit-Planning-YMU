@@ -1,4 +1,12 @@
 /**
+ * SUPERSEDED (2026-10-16). This writes Visit.observedSubjectId and
+ * Visit.observedTeacherId, which nothing reads any more: a visit's
+ * observations live in VisitObservation, one per class watched, and migration
+ * 20261016000000_visit_observations copied these columns into it. Running this
+ * now would fill columns no screen, export or relay looks at. Kept for the
+ * record of how the historical programmes and teachers were inferred; adapt
+ * it to write VisitObservation before using it again.
+ *
  * Fill in the programme, and the observed teacher, on visits recorded before
  * the app captured them.
  *

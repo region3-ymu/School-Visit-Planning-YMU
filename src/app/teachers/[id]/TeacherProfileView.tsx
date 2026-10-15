@@ -109,9 +109,11 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
             over: what the visit actually recorded is not the same thing for both. */}
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-3 flex items-start gap-1.5">
           <Info size={12} className="shrink-0 mt-0.5" />
-          A visit now names the teacher whose class was observed. Older ones recorded only the
-          school, and are marked <span className="font-medium">unattributed</span> — those still
-          show on every teacher at that school, because nothing captured which one it was.
+          Each observation names the teacher whose class was watched, and only that teacher&apos;s
+          are shown here — when two classes ran side by side, the other teacher&apos;s ratings stay
+          on their own page. Older visits recorded only the school, and are marked{" "}
+          <span className="font-medium">unattributed</span> — those still show on every teacher at
+          that school, because nothing captured which one it was.
         </p>
 
         {observations.length === 0 ? (
@@ -127,6 +129,7 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
                   <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
                     <span className="text-sm font-medium text-gray-800 dark:text-gray-100">
                       {format(new Date(o.date), "MMM d, yyyy")} ·{" "}
+                      {o.subjectName && <span>{o.subjectName} · </span>}
                       <Link
                         href={`/schools/${o.schoolId}`}
                         className="text-indigo-600 dark:text-indigo-400 hover:underline"
@@ -175,9 +178,9 @@ export default function TeacherProfileView({ teacherId }: { teacherId: string })
                     <p className="text-sm text-gray-400">No ratings recorded.</p>
                   )}
 
-                  {o.obsNotes && (
+                  {o.notes && (
                     <p className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">
-                      {o.obsNotes}
+                      {o.notes}
                     </p>
                   )}
                 </div>
