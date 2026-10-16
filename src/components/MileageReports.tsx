@@ -1,5 +1,6 @@
 "use client";
 
+import { openNativePicker } from "@/lib/openNativePicker";
 import { useCallback, useEffect, useState } from "react";
 import { format } from "date-fns";
 import { BarChart3, Download, Loader2, Car, AlertTriangle } from "lucide-react";
@@ -106,9 +107,9 @@ export default function MileageReports({ regionFilter }: { regionFilter?: string
 
         {preset === "custom" && (
           <>
-            <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className={selectClass} />
+            <input onClick={openNativePicker} type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className={selectClass} />
             <span className="text-gray-400 text-sm">to</span>
-            <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className={selectClass} />
+            <input onClick={openNativePicker} type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className={selectClass} />
           </>
         )}
 

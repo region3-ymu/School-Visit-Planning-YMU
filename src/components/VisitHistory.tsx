@@ -1,5 +1,6 @@
 "use client";
 
+import { openNativePicker } from "@/lib/openNativePicker";
 import { Fragment, useEffect, useState } from "react";
 import {
     getVisitHistory, addManualVisit, getSchools, getOtherRegionSchools,
@@ -825,6 +826,7 @@ export default function VisitHistory({ regionFilter }: { regionFilter?: string |
                             <div>
                                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date</label>
                                 <input
+                                    onClick={openNativePicker}
                                     type="date"
                                     value={visitDate}
                                     onChange={(e) => setVisitDate(e.target.value)}

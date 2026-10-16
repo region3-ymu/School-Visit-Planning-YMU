@@ -1,5 +1,6 @@
 "use client";
 
+import { openNativePicker } from "@/lib/openNativePicker";
 import { useState, useTransition } from "react";
 import {
   getVisitRulesForSchool,
@@ -120,6 +121,7 @@ function RuleForm({
           Effective from
         </label>
         <input
+          onClick={openNativePicker}
           type="date"
           value={effectiveFrom}
           onChange={(e) => setEffectiveFrom(e.target.value)}

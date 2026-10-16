@@ -3,6 +3,10 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* Native controls follow the theme. Without it Android Chrome drew the
+     date input's calendar icon black on the dark background — invisible, so
+     Eric Levy (2026-10-15) found no way to open the picker at all. */
+  color-scheme: light dark;
 }
 
 @theme inline {

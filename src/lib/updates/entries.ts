@@ -23,6 +23,15 @@ export type UpdateEntry = {
 
 export const UPDATES: UpdateEntry[] = [
   {
+    date: "2026-10-16",
+    items: [
+      {
+        module: null,
+        text: "Date and time fields open their calendar when you tap them, and their icons show in dark mode — on Android the date could not be changed at all.",
+      },
+    ],
+  },
+  {
     date: "2026-10-15",
     items: [
       {

@@ -1,5 +1,6 @@
 "use client";
 
+import { openNativePicker } from "@/lib/openNativePicker";
 import { useState } from "react";
 import { AlertTriangle, CalendarClock } from "lucide-react";
 import type { VisitInfo } from "@/lib/types";
@@ -111,6 +112,7 @@ export default function VisitWindowPicker({
               <label className="flex items-center gap-1">
                 Start
                 <input
+                  onClick={openNativePicker}
                   type="time"
                   value={choice.start ?? resolved.start}
                   onChange={(e) => onChange({ ...choice, start: e.target.value })}
